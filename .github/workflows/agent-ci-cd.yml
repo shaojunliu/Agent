@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}/agent
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/agent
   DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/apps/stack' }}
   COMPOSE_FILE: ${{ secrets.COMPOSE_FILE || 'docker-compose.prod.yml' }}
 
