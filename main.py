@@ -52,7 +52,7 @@ async def call_qwen(req: ChatRequest) -> str:
 # ------------ 健康检查 ------------
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    return {"ok": "health !"}
 
 # ------------ HTTP：/chat ------------
 @app.post("/chat", response_model=ChatResponse)
