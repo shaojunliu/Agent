@@ -8,7 +8,8 @@ on:
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/agent
   DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/apps/stack' }}
-  COMPOSE_FILE: ${{ secrets.COMPOSE_FILE || 'docker-compose.prod.yml' }}
+  COMPOSE_DST: ${{ secrets.COMPOSE_FILE || 'docker-compose.yml' }}
+  SERVICE_NAME: ${{ secrets.AGENT_SERVICE_NAME || 'agent' }}
 
 jobs:
   build-and-push:
@@ -18,19 +19,13 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build & Push Image
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -51,8 +46,13 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script_stop: true
           script: |
-            docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" -p "${{ secrets.GHCR_READ_TOKEN }}"
+            # 登录 GHCR
+            echo "${{ secrets.GHCR_READ_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
             cd "${{ env.DEPLOY_PATH }}"
-            docker compose -f "${{ env.COMPOSE_FILE }}" pull agent
-            docker compose -f "${{ env.COMPOSE_FILE }}" up -d agent
+            # 若端口被旧容器占用，先清理（仅清理绑定了 8001 的容器）
+            OCC=$(docker ps --format '{{.ID}} {{.Ports}}' | awk '/:8001->/ {print $1}')
+            [ -n "$OCC" ] && docker rm -f $OCC || true
+            # 拉镜像并重启 agent
+            docker compose -f "${{ env.COMPOSE_DST }}" pull "${{ env.SERVICE_NAME }}"
+            docker compose -f "${{ env.COMPOSE_DST }}" up -d --remove-orphans "${{ env.SERVICE_NAME }}"
             docker system prune -f
