@@ -7,8 +7,13 @@ import json
 
 # 从环境变量读取 DashScope API Key
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+# 从环境变量读取 Open API Key
+OPEN_API_KEY = os.getenv("OPEN_API_KEY", "")
 # 供上游服务调用鉴权（HTTP/WS）
 AGENT_API_KEY = os.getenv("AGENT_API_KEY", "")  
+
+if not OPEN_API_KEY:
+    raise RuntimeError("请先在环境变量里设置 OPEN_API_KEY")
 
 if not DASHSCOPE_API_KEY:
     raise RuntimeError("请先在环境变量里设置 DASHSCOPE_API_KEY")
@@ -31,6 +36,7 @@ class ChatResponse(BaseModel):
 
 # ------------ 共用调用 ------------
 DASH_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+OPEN_URL = "https://api.openai.com/v1/chat/completions"
 
 async def call_qwen(req: ChatRequest) -> str:
     headers = {"Authorization": f"Bearer {DASHSCOPE_API_KEY}"}
@@ -47,6 +53,23 @@ async def call_qwen(req: ChatRequest) -> str:
     data = r.json()
     return data.get("output", {}).get("text", str(data))
 
+
+async def call_gpt(req: ChatRequest) -> str:
+    headers = {"Authorization": f"Bearer {OPEN_API_KEY}"}
+    payload = {
+        "model": req.model or "gpt-5",
+        "input": {"messages": [m.dict() for m in req.messages]},
+        "temperature":1.2,
+        "max_tokens":20
+        # 需要可加参数："parameters": {"temperature": req.temperature, "max_tokens": req.max_tokens}
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(DASH_URL, headers=headers, json=payload)
+    if r.status_code != 200:
+        # 将 dashscope 的错误透出，方便排查
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    data = r.json()
+    return data.get("output", {}).get("text", str(data))
 
 
 # ------------ 健康检查 ------------
@@ -96,7 +119,7 @@ async def ws_chat(ws: WebSocket, key: str | None = Query(default=None)):
 
             # 调用通义千问
             try:
-                reply = await call_qwen(req_obj)
+                reply = await call_gpt(req_obj)
             except HTTPException as e:
                 # 用文本帧返回 JSON
                 await ws.send_json({"error": True, "status": e.status_code, "detail": e.detail})
