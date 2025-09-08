@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, Header, WebSocket, WebSocketDisconne
 from pydantic import BaseModel
 from typing import List,Optional
 import json
+from dataclasses import dataclass, field
 
 # 从环境变量读取 DashScope API Key
 
@@ -22,15 +23,64 @@ if not DASHSCOPE_API_KEY:
 app = FastAPI(title="Agent (HTTP + WebSocket)")
 
 # ------------ 数据模型 ------------
-class Message(BaseModel):
-    role: str            # "user" / "assistant" / "system"
+@dataclass
+class Message:
+    role: str
     content: str
 
-class ChatRequest(BaseModel):
-    messages: List[Message]
-    model: Optional[str] = "qwen-plus"
-    temperature: Optional[float] = 0.7
-    max_tokens: Optional[int] = 512
+@dataclass
+class ChatRequest:
+    model: str
+    messages: List[Message] = field(default_factory=list)
+    temperature: Optional[float] = None
+    max_completion_tokens: Optional[int] = None
+    def to_dict(self):
+        payload = {
+            "model": self.model,
+            "messages": [{"role": m.role, "content": m.content} for m in self.messages],
+        }
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        if self.max_completion_tokens is not None:
+            payload["max_completion_tokens"] = self.max_completion_tokens
+        return payload
+
+    @classmethod
+    def builder(cls):
+        return ChatRequestBuilder()
+
+
+class ChatRequestBuilder:
+    def __init__(self):
+        self._model = None
+        self._messages = []
+        self._temperature = None
+        self._max_completion_tokens = None
+
+    def model(self, model: str):
+        self._model = model
+        return self
+
+    def addMessage(self, role: str, content: str):
+        self._messages.append(Message(role=role, content=content))
+        return self
+    def temperature(self, temp: float):
+        self._temperature = temp
+        return self 
+    
+    def max_completion_tokens(self, tokens: int):           # ← 方法名可保持不变
+        self._max_completion_tokens = tokens                # ← 写入带下划线的属性
+        return self
+
+    def build(self):
+        return ChatRequest(
+            model=self._model,
+            messages=self._messages,
+            temperature=self._temperature,
+            max_completion_tokens=self._max_completion_tokens,
+        )
+    
+
 
 class ChatResponse(BaseModel):
     reply: str
@@ -57,20 +107,40 @@ async def call_qwen(req: ChatRequest) -> str:
 
 async def call_gpt(req: ChatRequest) -> str:
     headers = {"Authorization": f"Bearer {OPEN_API_KEY}"}
-    payload = {
-        "model": req.model or "gpt-5",
-        "input": {"messages": [m.dict() for m in req.messages]},
-        "temperature":1.2,
-        "max_tokens":20
-        # 需要可加参数："parameters": {"temperature": req.temperature, "max_tokens": req.max_tokens}
-    }
+    payload = req.to_dict()
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(DASH_URL, headers=headers, json=payload)
+        r = await client.post(OPEN_URL, headers=headers, json=payload)
     if r.status_code != 200:
         # 将 dashscope 的错误透出，方便排查
-        raise HTTPException(status_code=r.status_code, detail=r.text)
+        raise HTTPException(status_code=r.status_code, detail=r.text+"err from gpt")
     data = r.json()
-    return data.get("output", {}).get("text", str(data))
+    # -------- 1) OpenAI 风格: chat.completions --------
+    # 典型返回: {"choices": [{"message": {"role":"assistant","content":"..."} , ...}], "usage": {...}}
+    if isinstance(data, dict) and "choices" in data and data["choices"]:
+        ch0 = data["choices"][0] or {}
+        # 优先取 message.content
+        msg = ch0.get("message") or {}
+        content = msg.get("content")
+
+        # content 可能是 str 或 富媒体分片(list)
+        if isinstance(content, str) and content:
+            return content
+
+        if isinstance(content, list):
+            # chat 内容为多段结构化分片时：拼接其中的 text
+            texts = []
+            for part in content:
+                # OpenAI 多模态结构: {"type": "text", "text": "..."}
+                if isinstance(part, dict) and part.get("type") == "text":
+                    t = part.get("text")
+                    if isinstance(t, str):
+                        texts.append(t)
+            if texts:
+                return "".join(texts)
+
+        # 某些实现可能放在 choice 的其他字段（极少见）
+        if "text" in ch0 and isinstance(ch0["text"], str) and ch0["text"]:
+            return ch0["text"]
 
 
 # ------------ 健康检查 ------------
@@ -112,13 +182,11 @@ async def ws_chat(ws: WebSocket, key: str | None = Query(default=None)):
                 raw = bin_data.decode("utf-8", errors="replace")
 
             # 解析消息：JSON 或纯文本
-            try:
-                data = json.loads(raw)
-                req_obj = ChatRequest(**data)
-            except Exception:
-                req_obj = ChatRequest(messages=[Message(role="user", content=raw)])
+            req_obj = (ChatRequest.builder().model("gpt-4")
+                        .addMessage("system","你是一个聊天机器人，但你要把自己当成一个真人，和用户平等话语权的人，负责简单回复,回复需要人性化，口语化，和用户输入风格相似。答复不需要敬语，一次答复只返回到一个标点符号结束，回复不要包含 哈哈等语气词")
+                        .addMessage("user", raw).max_completion_tokens(30).build())
 
-            # 调用通义千问
+            # 调用模型
             try:
                 reply = await call_gpt(req_obj)
             except HTTPException as e:

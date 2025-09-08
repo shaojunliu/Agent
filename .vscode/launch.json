@@ -1,0 +1,23 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: FastAPI",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                 "main:app",               // app 对象位置：文件名:对象名
+                 "--reload",               // 热重载
+                 "--port", "8001",         // 监听端口
+                 "--host", "0.0.0.0"       // 本机可访问
+            ],
+            "jinja": true,
+            "envFile": "${workspaceFolder}/.env",   // 这里加载 .env 里的 API_KEY
+            "console": "integratedTerminal"
+        }
+    ]
+}
