@@ -11,8 +11,6 @@ from dataclasses import dataclass, field
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 # 从环境变量读取 Open API Key
 OPEN_API_KEY = os.getenv("OPEN_API_KEY", "")
-# 供上游服务调用鉴权（HTTP/WS）
-AGENT_API_KEY = os.getenv("AGENT_API_KEY", "")  
 
 if not OPEN_API_KEY:
     raise RuntimeError("请先在环境变量里设置 OPEN_API_KEY")
@@ -151,25 +149,16 @@ def healthz():
 # ------------ HTTP：/chat ------------
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, x_agent_key: str = Header(default="")):
-    # 简单鉴权（可选）
-    if AGENT_API_KEY and x_agent_key != AGENT_API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
     reply = await call_qwen(req)
     return ChatResponse(reply=reply)
 
 
 # ------------ WebSocket：/ws/chat ------------
-# 约定：连接时带 ?key=<AGENT_API_KEY>
 # 消息格式支持两种：
 # A) 直接发纯文本："你好，介绍一下你自己"
 # B) 发 JSON：{"messages":[{"role":"user","content":"你好"}], "model":"qwen-plus"}
 @app.websocket("/ws/chat")
 async def ws_chat(ws: WebSocket, key: str | None = Query(default=None)):
-    # 简单鉴权（可选）
-    if AGENT_API_KEY and key != AGENT_API_KEY:
-        await ws.close(code=4401)  # Unauthorized
-        return
-
     await ws.accept()
     try:
         while True:
