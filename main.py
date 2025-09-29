@@ -95,33 +95,34 @@ async def ws_chat(ws: WebSocket):
     await ws.accept()
     try:
         while True:
-            # 收文本；若客户端发二进制则尝试转成 utf-8 文本
-            try:
-                raw = await ws.receive_text()
-            except Exception:
-                raw = (await ws.receive_bytes()).decode("utf-8", errors="replace")
+            message = await ws.receive()  # 不要先 receive_text 再兜底 bytes
+            typ = message["type"]
 
-            # 尝试把文本解析为 JSON；失败就当纯文本
-            payload = None
-            try:
-                payload_candidate = json.loads(raw)
-                if isinstance(payload_candidate, dict):
-                    payload = payload_candidate
-            except Exception:
-                pass
+            if typ == "websocket.disconnect":
+                # 客户端主动断开：1000 正常、1006 异常；这里直接退出循环
+                # code = message.get("code", 1000); reason = message.get("reason", "")
+                break
 
-            # 构建统一的 ChatRequest
-            try:
-                req_obj = build_req_from_payload(payload, raw)
-            except Exception as e:
-                await ws.send_json({"error": True, "status": 400, "detail": f"bad request: {e!s}"})
+            if typ != "websocket.receive":
+                # 其它类型直接忽略继续
                 continue
 
-            # 调模型（这里用 qwen；如果你做了 smart_call，可替换为 smart_call(req_obj)）
+            # 取出文本/二进制
+            if "text" in message and message["text"] is not None:
+                raw = message["text"]
+            else:
+                data: bytes = message.get("bytes") or b""
+                raw = data.decode("utf-8", errors="replace")
+
+            raw = (raw or "").strip()
+            if not raw:
+                await ws.send_json({"error": True, "status": 400, "detail": "empty message"})
+                continue
+
+            # 构建请求并调用模型（这里走通义千问）
+            req_obj = build_req(raw)
             try:
                 reply = await call_qwen(req_obj)
-                # reply 为空给个兜底
-                reply = reply or "（空回复）"
             except HTTPException as e:
                 await ws.send_json({"error": True, "status": e.status_code, "detail": e.detail})
                 continue
@@ -129,10 +130,17 @@ async def ws_chat(ws: WebSocket):
                 await ws.send_json({"error": True, "status": 500, "detail": f"agent error: {e!s}"})
                 continue
 
-            await ws.send_json({"reply": reply})
+            await ws.send_json({"reply": reply or ""})
 
     except WebSocketDisconnect:
-        return
+        # 并发竞态下也可能直接抛到这里，直接吞掉即可
+        pass
+    finally:
+        # 双方可能已关，这里 best-effort 关闭
+        try:
+            await ws.close()
+        except Exception:
+            pass
     
 # -------- OpenAI ----------
 async def call_gpt(req: ChatRequest) -> str:
