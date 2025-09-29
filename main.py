@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 # 从环境变量读取 Open API Key
 OPEN_API_KEY = os.getenv("OPEN_API_KEY", "")
+# 供上游服务调用鉴权（HTTP/WS）
+AGENT_API_KEY = os.getenv("AGENT_API_KEY", "")  
 
 if not OPEN_API_KEY:
     raise RuntimeError("请先在环境变量里设置 OPEN_API_KEY")
