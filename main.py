@@ -120,7 +120,7 @@ async def ws_chat(ws: WebSocket):
                 continue
 
             # 构建请求并调用模型（这里走通义千问）
-            req_obj = build_req(raw)
+            req_obj = build_req_from_payload(raw)
             try:
                 reply = await call_qwen(req_obj)
             except HTTPException as e:
