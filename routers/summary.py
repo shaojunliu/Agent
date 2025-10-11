@@ -10,6 +10,9 @@ from models.record_model import Record,SummaryReq,SummarizeResultResp
 import json
 import re
 
+# 是否允许在缺少 moodKeywords 时进行一次极简补充调用
+FILL_MOOD_WITH_LLM = True
+
 router = APIRouter(prefix="/summary")
 
 SYSTEM_SUMMARY = (
@@ -58,71 +61,137 @@ async def summarize(body: SummaryReq):
     if not obj:
         obj = {"article": "Agent 返回空响应", "moodKeywords": "sad,sad,sad", "model": DEFAULT_MODEL, "tokenUsageJson": "{}"}
 
+    # 若关键词缺失，用一次极简 LLM 调用补齐（可通过 FILL_MOOD_WITH_LLM 控制）
+    if not obj.get("moodKeywords"):
+        obj["moodKeywords"] = await _maybe_gen_mood_with_llm(obj.get("article",""))
+    
     return SummarizeResultResp(
         article=obj.get("article", "（空）"),
-        moodKeywords=obj.get("moodKeywords", "平静, 专注, 期待"),
+        moodKeywords=obj.get("moodKeywords", "平静，专注，期待"),  # 注意中文逗号
         model=obj.get("model", DEFAULT_MODEL),
         tokenUsageJson=obj.get("tokenUsageJson", "")
     )
 
 
 # ================= 工具函数 =================
+async def _maybe_gen_mood_with_llm(text: str) -> str:
+    """缺少关键词时，用一次极简 LLM 调用补齐（可通过开关关闭）"""
+    from models.chat_models import ChatRequest
+    from services.llm_clients import smart_call, DEFAULT_MODEL
+    if not FILL_MOOD_WITH_LLM or not text:
+        return ""
+    sys = "只输出三个中文情绪关键词，用中文逗号分隔。不要输出解释。"
+    usr = f"请从以下内容提取三个情绪关键词：\n{text[:1200]}"
+    req = ChatRequest(
+        model=DEFAULT_MODEL,
+        messages=[type("M", (), {"role":"system","content":sys}),
+                  type("M", (), {"role":"user","content":usr})],
+        temperature=0.2,
+        max_completion_tokens=32
+    )
+    out = await smart_call(req)
+    out = _clean_text(out or "")
+    # 简单规范化：只取前三个、用中文逗号连接
+    parts = re.split(r"[,\uFF0C/|， ]+", out)
+    parts = [p.strip() for p in parts if p.strip()]
+    return "，".join(parts[:3])
+
 def _parse_llm_output(raw: str) -> Dict[str, Any]:
-    """兼容多种 LLM 输出格式（JSON / ```json``` / 文本段落）"""
+    """尽可能把 LLM 输出规整成 {article, moodKeywords, model, tokenUsageJson}"""
     if not raw:
         return {}
     raw = raw.strip()
 
-    # 1) 纯 JSON
+    # 1) 首先解析顶层 JSON / 代码块 JSON
+    obj = None
+    for candidate in (raw, re.search(r"```json\s*(\{.*?\})\s*```", raw, flags=re.S).group(1) if re.search(r"```json\s*(\{.*?\})\s*```", raw, flags=re.S) else None):
+        if not candidate:
+            continue
+        maybe = _try_parse_json(candidate)
+        if isinstance(maybe, dict):
+            obj = maybe
+            break
+
+    if not isinstance(obj, dict):
+        obj = {}
+
+    # 2) 若 article 是“内嵌 JSON 字符串”，把它展开合并
+    inner = {}
+    article_val = obj.get("article")
+    if isinstance(article_val, str):
+        inner = _extract_inner_from_article(article_val)
+        if "article" in inner:
+            obj["article"] = inner["article"]
+        else:
+            obj["article"] = _clean_text(article_val)
+        if "moodKeywords" in inner and not obj.get("moodKeywords"):
+            obj["moodKeywords"] = inner["moodKeywords"]
+
+    # 3) 补救：如果还没有 article，就从原始文本抠“每日总结”段落
+    if not obj.get("article"):
+        m1 = re.search(r"(?:^|\n)\s*#+\s*每日总结\s*(.+?)(?:\n#|\Z)", raw, flags=re.S)
+        obj["article"] = _clean_text(m1.group(1)) if m1 else _clean_text(raw[:800])
+
+    # 4) 清洗 article
+    obj["article"] = _clean_text(obj.get("article", ""))
+
+    # 5) 补救 moodKeywords：从原始文本/内层里抓，否则留空等下再做二次生成
+    if not obj.get("moodKeywords"):
+        m2 = re.search(r"(?:^|\n)\s*#+\s*今日情绪关键词\s*[:：]?\s*([^\n]+)", raw)
+        if m2:
+            obj["moodKeywords"] = _clean_text(m2.group(1))
+
+    # 6) 规范化 model/tokenUsageJson
+    if not obj.get("model"):
+        obj["model"] = DEFAULT_MODEL
+    if not obj.get("tokenUsageJson"):
+        obj["tokenUsageJson"] = ""
+
+    return obj
+
+
+def _clean_text(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    # 先把常见的转义去掉
+    s = s.replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t")
+    s = s.replace("\\\"", "\"")
+    # 收敛多余空白
+    s = re.sub(r"[ \t]+", " ", s)
+    # 把多行变成一个段落（你也可以改成保留换行）
+    s = re.sub(r"\s*\n\s*", " ", s).strip()
+    return s
+
+def _try_parse_json(s: str):
     try:
-        obj = json.loads(raw)
-        if isinstance(obj, dict):
-            inner = obj.get("article")
-            if isinstance(inner, str):
-                try:
-                    inner_obj = json.loads(inner)
-                    if isinstance(inner_obj, dict) and "article" in inner_obj:
-                        # 把内层结构展平
-                        obj.update(inner_obj)
-                except Exception:
-                    pass
-            return obj
+        return json.loads(s)
     except Exception:
-        pass
+        return None
+    
+def _extract_inner_from_article(article_val: str) -> dict:
+    """
+    处理把 JSON 当字符串塞进 article 的情况：
+    - 先尝试把 article 当 JSON 解析
+    - 解析失败就用正则把 "article": "..." / "moodKeywords": "..." 提取出来
+    """
+    if not isinstance(article_val, str):
+        return {}
 
-    # 2) ```json``` 包裹
-    m = re.search(r"```json\s*(\{.*?\})\s*```", raw, flags=re.S)
-    if m:
-        try:
-            obj = json.loads(m.group(1))
-            if isinstance(obj, dict):
-                inner = obj.get("article")
-                if isinstance(inner, str):
-                    try:
-                        inner_obj = json.loads(inner)
-                        if isinstance(inner_obj, dict) and "article" in inner_obj:
-                            obj.update(inner_obj)
-                    except Exception:
-                        pass
-                return obj
-        except Exception:
-            pass
+    cand = article_val.strip()
 
-    # 3) 纯文本兜底（保持原样）
-    article = ""
-    mood = ""
-    m1 = re.search(r"(?:^|\n)\s*#+\s*每日总结\s*(.+?)(?:\n#|\Z)", raw, flags=re.S)
-    if m1:
-        article = m1.group(1).strip()
-    else:
-        article = raw[:800].strip()
-    m2 = re.search(r"(?:^|\n)\s*#+\s*今日情绪关键词\s*[:：]?\s*(.+)", raw)
-    if m2:
-        mood = m2.group(1).strip()
+    # A) 如果是 { ... } 或 \"{...}\" 形态，直接再解析一次
+    maybe = _try_parse_json(cand)
+    if isinstance(maybe, dict) and ("article" in maybe or "moodKeywords" in maybe):
+        return maybe
 
-    return {
-        "article": article or "（空）",
-        "moodKeywords": mood or "平静, 希望, 未来",
-        "model": "qwen-plus",
-        "tokenUsageJson": ""
-    }
+    # B) 正则从字符串里“抠出”内嵌的键值
+    inner = {}
+    # "article": "......"
+    m_article = re.search(r'"article"\s*:\s*"(.+?)"', cand, flags=re.S)
+    if m_article:
+        inner["article"] = _clean_text(m_article.group(1))
+    # "moodKeywords": "......"
+    m_mood = re.search(r'"moodKeywords"\s*:\s*"(.+?)"', cand, flags=re.S)
+    if m_mood:
+        inner["moodKeywords"] = _clean_text(m_mood.group(1))
+    return inner
