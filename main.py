@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from agents.routers.chat import router as chat_router
-from agents.routers.summary import router as summary_router
+from routers.chat import router as chat_router
+from routers.summary import router as summary_router
 
 app = FastAPI(title="Agent (HTTP + WebSocket)")
 
