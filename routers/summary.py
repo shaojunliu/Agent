@@ -3,8 +3,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Literal
-from ..models.chat_models import ChatRequest
-from ..services.llm_clients import smart_call, DEFAULT_MODEL
+from agent.models.chat_models import ChatRequest
+from agent.services.llm_clients import smart_call, DEFAULT_MODEL
 
 router = APIRouter(prefix="/api")
 

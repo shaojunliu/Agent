@@ -2,8 +2,8 @@
 
 import httpx
 from fastapi import HTTPException
-from ..core.config import DASHSCOPE_API_KEY, OPEN_API_KEY, DASH_URL, OPEN_URL, DEFAULT_MODEL
-from ..models.chat_models import ChatRequest
+from agent.core.config import DASHSCOPE_API_KEY, OPEN_API_KEY, DASH_URL, OPEN_URL, DEFAULT_MODEL
+from agent.models.chat_models import ChatRequest
 
 __all__ = ["call_gpt", "call_qwen", "smart_call", "DEFAULT_MODEL"]
 

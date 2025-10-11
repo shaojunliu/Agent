@@ -2,8 +2,8 @@
 
 import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
-from ..services.builder import build_req_from_payload
-from ..services.llm_clients import call_qwen  # 你也可以替换为 smart_call
+from agent.services.builder import build_req_from_payload
+from agent.services.llm_clients import call_qwen  # 你也可以替换为 smart_call
 
 router = APIRouter()
 
