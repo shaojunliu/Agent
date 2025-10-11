@@ -7,6 +7,8 @@ from models.chat_models import ChatRequest
 from services.llm_clients import smart_call, DEFAULT_MODEL
 from typing import List, Optional, Union, Dict, Any, Literal
 from models.record_model import Record,SummaryReq,SummarizeResultResp
+import json
+import re
 
 router = APIRouter(prefix="/summary")
 
