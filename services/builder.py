@@ -1,7 +1,7 @@
 # ChatRequest 构建、通用解析
 
-from agent.services.llm_clients import DEFAULT_MODEL
-from agent.models.chat_models import ChatRequest, Message
+from services.llm_clients import DEFAULT_MODEL
+from models.chat_models import ChatRequest, Message
 
 def build_req_from_payload(payload: dict | None, raw_text: str) -> ChatRequest:
     """
