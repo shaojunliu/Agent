@@ -13,11 +13,11 @@ class Record(BaseModel):
 
 class SummaryReq(BaseModel):
     type: str                     # 必须为 "daily_summary"
-    openid: Optional[str] = None  # 用户 openId，可为空
+    openid: str  # 用户 openId，可为空
     text: str                     # 必填，Memo 拼好的当天聊天内容
 
 class SummarizeResultResp(BaseModel):
     article: str
     moodKeywords: str
     model: str = "default"
-    tokenUsageJson: str = "{}"
+    tokenUsageJson: str = ""
