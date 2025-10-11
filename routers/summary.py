@@ -59,17 +59,20 @@ async def summarize(body: SummaryReq):
     raw = await smart_call(req)
     obj = _parse_llm_output(raw or "")
     if not obj:
-        obj = {"article": "Agent 返回空响应", "moodKeywords": "sad,sad,sad", "model": DEFAULT_MODEL, "tokenUsageJson": "{}"}
+        obj = {"article": "Agent 返回空响应", "moodKeywords": "sad,sad,sad", "model": DEFAULT_MODEL, "tokenUsageJson": ""}
 
     # 若关键词缺失，用一次极简 LLM 调用补齐（可通过 FILL_MOOD_WITH_LLM 控制）
     if not obj.get("moodKeywords"):
         obj["moodKeywords"] = await _maybe_gen_mood_with_llm(obj.get("article",""))
+
+    # 解析后的 obj 中可能含有 tokenUsageJson（dict）
+    token_usage = _as_str(obj.get("tokenUsageJson"))
     
     return SummarizeResultResp(
         article=obj.get("article", "（空）"),
         moodKeywords=obj.get("moodKeywords", "平静，专注，期待"),  # 注意中文逗号
         model=obj.get("model", DEFAULT_MODEL),
-        tokenUsageJson=obj.get("tokenUsageJson", "")
+        tokenUsageJson=token_usage
     )
 
 
@@ -195,3 +198,11 @@ def _extract_inner_from_article(article_val: str) -> dict:
     if m_mood:
         inner["moodKeywords"] = _clean_text(m_mood.group(1))
     return inner
+
+def _as_str(v) -> str:
+    """将 dict/list 转成 JSON 字符串；None 变空串；其余直接 str。"""
+    if v is None:
+        return ""
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, ensure_ascii=False)
+    return str(v)
