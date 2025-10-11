@@ -5,57 +5,107 @@ from pydantic import BaseModel
 from typing import List, Optional, Literal
 from models.chat_models import ChatRequest
 from services.llm_clients import smart_call, DEFAULT_MODEL
+from typing import List, Optional, Union, Dict, Any, Literal
+from models.record_model import Record,SummaryReq,SummarizeResultResp
 
-router = APIRouter(prefix="/api")
-
-class Record(BaseModel):
-    role: Literal["system", "user", "assistant", "tool"] = "user"
-    content: str
-
-class SummaryReq(BaseModel):
-    model: Optional[str] = None
-    records: List[Record] = []       # 传入需要被总结的对话（按时间正序）
-    prompt: Optional[str] = None     # 可选：业务自定义提示词
-    style: Literal["brief","bullet","action","daily"] = "brief"
-    max_tokens: Optional[int] = 512
-    temperature: Optional[float] = 0.3
-
-class SummaryResp(BaseModel):
-    summary: str
+router = APIRouter(prefix="/summary")
 
 SYSTEM_SUMMARY = (
-    "你是一个严谨的会议与对话总结助手。请基于提供的历史对话，输出高质量的中文摘要。"
-    "保持客观、去除寒暄，突出要点、结论与后续行动。"
+    "你是一个严谨的中文总结助手。请基于给定内容生成“每日总结”，并提取 3 个中文情绪关键词。"
+    "返回 JSON，且键名必须严格为：article、moodKeywords、model、tokenUsageJson。"
+    "moodKeywords 用中文逗号分隔 3 个词，例如：专注, 放松, 感恩。"
 )
 
+
 STYLE_TPL = {
-    "brief": "以不超过 8 行的精炼段落概括关键信息与结论。",
-    "bullet": "使用有序要点输出：1) 关键结论 2) 证据/细节 3) 风险或分歧 4) 待办与责任人。",
-    "action": "仅输出行动清单（谁在何时做什么，成功判定标准）。",
+    "brief":  "总结要精炼（不超过 8 行），突出事实与结论。",
+    "bullet": "用要点列出：关键结论/证据/风险/待办。",
+    "action": "仅输出行动项（负责人/截至时间/成功标准）。",
     "daily":  "以日报格式输出：今日进展/问题/明日计划/需协助。",
 }
 
-@router.post("/summary", response_model=SummaryResp)
+# ================= 主逻辑 =================
+@router.post("/daily", response_model=SummarizeResultResp)
 async def summarize(body: SummaryReq):
-    if not body.records:
-        raise HTTPException(status_code=400, detail="records 不能为空")
+    if body.type != "daily_summary":
+        raise HTTPException(status_code=400, detail="type 必须为 'daily_summary'")
+    if not body.text.strip():
+        raise HTTPException(status_code=400, detail="text 不能为空")
 
-    # 组织 messages
-    style_note = STYLE_TPL.get(body.style, STYLE_TPL["brief"])
-    user_prompt = body.prompt or "请对以下对话进行总结。"
-    messages = [{"role":"system","content": SYSTEM_SUMMARY + style_note},
-                {"role":"user","content": user_prompt}]
-
-    # 将历史对话拼入
-    for r in body.records:
-        messages.append({"role": r.role, "content": r.content})
-
-    req = ChatRequest(
-        model=body.model or DEFAULT_MODEL,
-        messages=[type("M", (), m) for m in messages],  # 轻量把 dict 适配成有属性的对象
-        temperature=body.temperature,
-        max_completion_tokens=body.max_tokens
+    # system + user 指令
+    system_msg = "你是一个中文总结助手，请只输出 JSON。"
+    user_prompt = (
+        "请基于以下内容生成“每日总结”并提取 3 个中文情绪关键词：\n"
+        "仅返回一个 JSON 对象，键名必须严格为："
+        "article、moodKeywords、model、tokenUsageJson。\n"
+        "moodKeywords 使用中文逗号分隔，例如：专注, 放松, 感恩。\n\n"
+        "=== 待总结内容 ===\n" + body.text
     )
 
-    text = await smart_call(req)
-    return SummaryResp(summary=text.strip())
+    req = ChatRequest(
+        model=DEFAULT_MODEL,
+        messages=[
+            type("M", (), {"role": "system", "content": system_msg}),
+            type("M", (), {"role": "user", "content": user_prompt})
+        ],
+        max_completion_tokens=200
+    )
+
+    raw = await smart_call(req)
+    obj = _parse_llm_output(raw or "")
+    if not obj:
+        obj = {"article": "Agent 返回空响应", "moodKeywords": "sad,sad,sad", "model": DEFAULT_MODEL, "tokenUsageJson": "{}"}
+
+    return SummarizeResultResp(
+        article=obj.get("article", "（空）"),
+        moodKeywords=obj.get("moodKeywords", "平静, 专注, 期待"),
+        model=obj.get("model", DEFAULT_MODEL),
+        tokenUsageJson=obj.get("tokenUsageJson", "")
+    )
+
+
+# ================= 工具函数 =================
+
+def _parse_llm_output(raw: str) -> Dict[str, Any]:
+    """兼容多种 LLM 输出格式（JSON / ```json``` / 文本段落）"""
+    if not raw:
+        return {}
+    raw = raw.strip()
+
+    # 1) 纯 JSON
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+
+    # 2) ```json``` 包裹
+    m = re.search(r"```json\s*(\{.*?\})\s*```", raw, flags=re.S)
+    if m:
+        try:
+            obj = json.loads(m.group(1))
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+
+    # 3) 纯文本兜底：提取“每日总结”和“情绪关键词”
+    article = ""
+    mood = ""
+    m1 = re.search(r"(?:^|\n)\s*#+\s*每日总结\s*(.+?)(?:\n#|\Z)", raw, flags=re.S)
+    if m1:
+        article = m1.group(1).strip()
+    else:
+        article = raw[:800].strip()
+
+    m2 = re.search(r"(?:^|\n)\s*#+\s*今日情绪关键词\s*[:：]?\s*(.+)", raw)
+    if m2:
+        mood = m2.group(1).strip()
+
+    return {
+        "article": article or "（空）",
+        "moodKeywords": mood or "平静, 专注, 期待",
+        "model": DEFAULT_MODEL,
+        "tokenUsageJson": ""
+    }
