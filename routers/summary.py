@@ -57,11 +57,17 @@ async def summarize(body: SummaryReq):
     raw = await smart_call(req)
     obj = _parse_llm_output(raw or "")
     if not obj:
-        obj = {"article": "Agent 返回空响应", "moodKeywords": "sad,sad,sad", "model": DEFAULT_MODEL, "tokenUsageJson": ""}
+        obj = {"article": "Agent 返回空响应", "moodKeywords": "sad,sad,sad","actionKeywords":"none,none,none","articleTitle":"title", "model": DEFAULT_MODEL, "tokenUsageJson": ""}
 
     # 若关键词缺失，用一次极简 LLM 调用补齐（可通过 FILL_MOOD_WITH_LLM 控制）
     if not obj.get("moodKeywords"):
         obj["moodKeywords"] = await _maybe_gen_mood_with_llm(obj.get("article",""))
+
+    if not obj.get("actionKeywords"):
+        obj["actionKeywords"] = await _maybe_gen_mood_with_llm(obj.get("article",""))  
+
+    if not obj.get("articleTitle"):
+        obj["articleTitle"] = await _maybe_gen_mood_with_llm(obj.get("article",""))         
 
     # 解析后的 obj 中可能含有 tokenUsageJson（dict）
     token_usage = _as_str(obj.get("tokenUsageJson"))
@@ -84,7 +90,7 @@ async def _maybe_gen_mood_with_llm(text: str) -> str:
     if not FILL_MOOD_WITH_LLM or not text:
         return ""
     sys = "只输出三个中文情绪关键词，用中文逗号分隔。不要输出解释。"
-    usr = f"请从以下内容提取三个情绪关键词：\n{text[:1200]}"
+    usr = f"请从以下内容提取三个情绪关键词：\n{text[:1200]}，三个行为关键字：\n{text[:1200]}，一个文章标题：\n{text[:1200]}"
     req = ChatRequest(
         model=DEFAULT_MODEL,
         messages=[type("M", (), {"role":"system","content":sys}),
@@ -100,7 +106,7 @@ async def _maybe_gen_mood_with_llm(text: str) -> str:
     return "，".join(parts[:3])
 
 def _parse_llm_output(raw: str) -> Dict[str, Any]:
-    """尽可能把 LLM 输出规整成 {article, moodKeywords, model, tokenUsageJson}"""
+    """尽可能把 LLM 输出规整成 {article, moodKeywords,actionKeywords,articleTitle, model, tokenUsageJson}"""
     if not raw:
         return {}
     raw = raw.strip()
@@ -129,6 +135,10 @@ def _parse_llm_output(raw: str) -> Dict[str, Any]:
             obj["article"] = _clean_text(article_val)
         if "moodKeywords" in inner and not obj.get("moodKeywords"):
             obj["moodKeywords"] = inner["moodKeywords"]
+        if "actionKeywords" in inner and not obj.get("actionKeywords"):
+            obj["actionKeywords"] = inner["actionKeywords"]
+        if "articleTitle" in inner and not obj.get("articleTitle"):
+            obj["articleTitle"] = inner["articleTitle"]
 
     # 3) 补救：如果还没有 article，就从原始文本抠“每日总结”段落
     if not obj.get("article"):
@@ -143,6 +153,16 @@ def _parse_llm_output(raw: str) -> Dict[str, Any]:
         m2 = re.search(r"(?:^|\n)\s*#+\s*今日情绪关键词\s*[:：]?\s*([^\n]+)", raw)
         if m2:
             obj["moodKeywords"] = _clean_text(m2.group(1))
+     # 5) 补救 actionKeywords：从原始文本/内层里抓，否则留空等下再做二次生成
+    if not obj.get("actionKeywords"):
+        m3 = re.search(r"(?:^|\n)\s*#+\s*今日行为关键词\s*[:：]?\s*([^\n]+)", raw)
+        if m3:
+            obj["moodKeywords"] = _clean_text(m3.group(1))   
+     # 5) 补救 articleTitle：从原始文本/内层里抓，否则留空等下再做二次生成
+    if not obj.get("articleTitle"):
+        m4 = re.search(r"(?:^|\n)\s*#+\s*今日文章标题\s*[:：]?\s*([^\n]+)", raw)
+        if m4:
+            obj["articleTitle"] = _clean_text(m4.group(1))        
 
     # 6) 规范化 model/tokenUsageJson
     if not obj.get("model"):
@@ -197,6 +217,13 @@ def _extract_inner_from_article(article_val: str) -> dict:
     m_mood = re.search(r'"moodKeywords"\s*:\s*"(.+?)"', cand, flags=re.S)
     if m_mood:
         inner["moodKeywords"] = _clean_text(m_mood.group(1))
+    m_action = re.search(r'"actionKeywords"\s*:\s*"(.+?)"', cand, flags=re.S)
+    if m_action:
+        inner["actionKeywords"] = _clean_text(m_action.group(1))        
+    m_articleTitle = re.search(r'"articleTitle"\s*:\s*"(.+?)"', cand, flags=re.S)
+    if m_articleTitle:
+        inner["articleTitle"] = _clean_text(m_articleTitle.group(1))                
+
     return inner
 
 def _as_str(v) -> str:
