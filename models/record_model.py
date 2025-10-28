@@ -19,5 +19,7 @@ class SummaryReq(BaseModel):
 class SummarizeResultResp(BaseModel):
     article: str
     moodKeywords: str
+    actionKeywords: str
+    articleTitle: str
     model: str = "default"
     tokenUsageJson: str = ""
