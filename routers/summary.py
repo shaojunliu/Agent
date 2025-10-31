@@ -25,7 +25,7 @@ async def summarize(body: SummaryReq):
         raise HTTPException(status_code=400, detail="text 不能为空")
 
     # ===== 提示词：最前面先给“强制 JSON 模版” =====
-    system_msg = "你是一个中文总结助手，只能输出 JSON，不要输出解释，不要输出 markdown，不要输出代码块。"
+    system_msg = "你是一个日记总结助手，只能输出 JSON，不要输出解释，不要输出 markdown，不要输出代码块。"
 
     SYSTEM_SUMMARY = (
         "下面是你必须遵守的输出格式，请只返回这个 JSON，字段名必须一模一样，不要多字段，不要少字段：\n"
