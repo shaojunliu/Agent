@@ -82,29 +82,6 @@ async def summarize(body: SummaryReq):
     )
 
 
-# ================= 工具函数 =================
-async def _maybe_gen_mood_with_llm(text: str) -> str:
-    """缺少关键词时，用一次极简 LLM 调用补齐（可通过开关关闭）"""
-    from models.chat_models import ChatRequest
-    from services.llm_clients import smart_call, DEFAULT_MODEL
-    if not FILL_MOOD_WITH_LLM or not text:
-        return ""
-    sys = "只输出三个中文情绪关键词，用中文逗号分隔。不要输出解释。"
-    usr = f"请从以下内容提取三个情绪关键词：\n{text[:1200]}，三个行为关键字：\n{text[:1200]}，一个文章标题：\n{text[:1200]}"
-    req = ChatRequest(
-        model=DEFAULT_MODEL,
-        messages=[type("M", (), {"role":"system","content":sys}),
-                  type("M", (), {"role":"user","content":usr})],
-        temperature=0.2,
-        max_completion_tokens=32
-    )
-    out = await smart_call(req)
-    out = _clean_text(out or "")
-    # 简单规范化：只取前三个、用中文逗号连接
-    parts = re.split(r"[,\uFF0C/|， ]+", out)
-    parts = [p.strip() for p in parts if p.strip()]
-    return "，".join(parts[:3])
-
 def _parse_llm_output(raw: str) -> Dict[str, Any]:
     """
     只做 JSON 解析：
