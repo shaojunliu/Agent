@@ -83,12 +83,6 @@ async def summarize(body: SummaryReq):
 
 
 def _parse_llm_output(raw: str) -> Dict[str, Any]:
-    """
-    只做 JSON 解析：
-    - 能直接 json.loads 成 dict → 用
-    - 能 json.loads 成 str → 再解一次
-    - 其他情况 → 返回 {}
-    """
     if not raw:
         return {}
 
