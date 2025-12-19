@@ -65,7 +65,7 @@ async def call_qwen(req: ChatRequest) -> str:
         payload["parameters"]["temperature"] = req.temperature
     if req.max_completion_tokens is not None:
         payload["parameters"]["max_tokens"] = req.max_completion_tokens
-    timeout = httpx.Timeout(20.0, connect=10.0)
+    timeout = httpx.Timeout(300.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(DASH_URL, headers=headers, json=payload)
     if r.status_code != 200:
