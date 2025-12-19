@@ -9,11 +9,14 @@ from typing import List, Optional, Union, Dict, Any, Literal
 from models.record_model import Record,SummaryReq,SummarizeResultResp
 import json
 import re
+import logging
 
 # 是否允许在缺少 moodKeywords 时进行一次极简补充调用
 FILL_MOOD_WITH_LLM = True
 
 router = APIRouter(prefix="/summary")
+
+logger = logging.getLogger(__name__)
 
 
 # ================= 主逻辑 =================
@@ -59,6 +62,10 @@ async def summarize(body: SummaryReq):
     )
 
     raw = await smart_call(req)
+    try:
+        logger.info("LLM raw output: %s", str(raw))
+    except Exception:
+        logger.exception("Failed to log LLM raw output")
     obj = _parse_llm_output(raw or "")
 
     # 解析失败 → 直接返回空 json
