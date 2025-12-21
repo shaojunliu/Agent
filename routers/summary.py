@@ -47,7 +47,7 @@ async def summarize(body: SummaryReq):
         "articleTitle为文章总结的标题,不超过8个纯中文字符，需要有记忆点优美，不要过于简单。\n"
         "moodKeywords 用中文逗号分隔 3 个词，例如：幸福, 轻松, 感恩。情绪关键字分为（喜悦、愤怒、悲伤、恐惧、厌恶、惊讶、内疚、亲密）9个大类。情绪关键字从子类选择从以下选择:喜悦包含：开心、轻松、满足、愉快、自豪、兴奋、平静、安心、幸福；愤怒包含:烦躁、不满、生气、愤慨、恼火、怨恨、冲动；悲伤包含:失落、沮丧、孤独、难过、惆怅、思念、遗憾；恐惧包含:紧张、焦虑、担心、不安、恐惧、害怕、担忧；厌恶包含:排斥、厌倦、嫌弃、反感、冷漠；惊讶包含:惊喜、震惊、意外、困惑、好奇；内疚包含:羞耻、内疚、后悔、自责、尴尬；亲密包含:亲近、温柔、体贴、感激、信赖、喜爱。\n"
         "actionKeywords 为总结文本中的行为关键字，例如：休息，工作，运动。\n"
-        "article 需要用第一人称日记视角，不要出现“用户”“你”。不超过 400 中文字符。\n"
+        "article 需要用第一人称日记视角，不要出现“用户”“你”。不超过 800 中文字符，以用户输入为主。\n"
         "=== 待总结内容 ===\n"
         + body.text
     )
@@ -59,7 +59,7 @@ async def summarize(body: SummaryReq):
             type("M", (), {"role": "system", "content": system_msg}),
             type("M", (), {"role": "user", "content": SYSTEM_SUMMARY}),
         ],
-        max_completion_tokens=1200,
+        max_completion_tokens=2000,
     )
 
     raw = await smart_call(req)
