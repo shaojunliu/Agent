@@ -16,7 +16,8 @@ FILL_MOOD_WITH_LLM = True
 
 router = APIRouter(prefix="/summary")
 
-logger = logging.getLogger(__name__)
+# 用 uvicorn 的 logger，确保日志出现在 docker logs / uvicorn 输出里
+logger = logging.getLogger("uvicorn.error")
 
 
 # ================= 主逻辑 =================
@@ -63,7 +64,8 @@ async def summarize(body: SummaryReq):
 
     raw = await smart_call(req)
     try:
-        logger.info("LLM raw output: %s", str(raw))
+        s = str(raw)
+        logger.info("LLM raw output len=%d head=%s", len(s), s[:2000])
     except Exception:
         logger.exception("Failed to log LLM raw output")
     obj = _parse_llm_output(raw or "")
