@@ -3,11 +3,12 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Literal
-from models.chat_models import ChatRequest
+from models.chat_models import ChatRequest, Message
 from services.llm_clients import smart_call, DEFAULT_MODEL
 from typing import List, Optional, Union, Dict, Any, Literal
 from models.record_model import Record,SummaryReq,SummarizeResultResp
 import json
+import os
 import re
 import logging
 
@@ -24,41 +25,40 @@ logger = logging.getLogger("uvicorn.error")
 @router.post("/daily", response_model=SummarizeResultResp)
 async def summarize(body: SummaryReq):
     if body.type != "daily_summary":
+        logger.error(f"Invalid summary type: {body.type}")
         raise HTTPException(status_code=400, detail="type 必须为 'daily_summary'")
     if not body.text.strip():
+        logger.error("Summary text is empty")
         raise HTTPException(status_code=400, detail="text 不能为空")
 
-    # ===== 提示词：最前面先给“强制 JSON 模版” =====
-    system_msg = (
-        "你是中文日记总结助手。必须严格只输出一行 JSON（不要换行、不要缩进、不要 markdown/代码块/解释）。"
-        "字段必须完全匹配要求的 6 个字段：article,moodKeywords,actionKeywords,articleTitle,model,tokenUsageJson。"
-    )
+    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "summary_prompts.json")
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            prompts = json.load(f)
+    except Exception:
+        logger.exception("Failed to load summary prompts json")
+        raise HTTPException(status_code=500, detail="summary prompts json 加载失败")
 
-    SYSTEM_SUMMARY = (
-        "下面是你必须遵守的输出格式：请只返回**一行** JSON（不要换行、不要缩进、不要 markdown/代码块），字段名必须一模一样，不要多字段，不要少字段：\n"
-        "{\"article\":\"...\",\"moodKeywords\":\"期待,焦虑,满足\",\"actionKeywords\":\"跑步,工作\",\"articleTitle\":\"美好的一天\",\"model\":\"qwen-plus\",\"tokenUsageJson\":\"\"}\n"
-        "如果无法生成，请返回一个空 JSON：{}\n"
-        "下面是写作要求，请严格参考：\n"
-        "你是一个的中文总结助手。请基于给定内容生成“每日总结”。\n"
-        "articleTitle为文章总结的标题,不超过8个纯中文字符，需要有记忆点优美，不要过于简单。\n"
-        "moodKeywords 用中文逗号分隔 3 个词，例如：幸福, 轻松, 感恩。情绪关键字分为（喜悦、愤怒、悲伤、恐惧、厌恶、惊讶、内疚、亲密）9个大类。情绪关键字从子类选择从以下选择:喜悦包含：开心、轻松、满足、愉快、自豪、兴奋、平静、安心、幸福；愤怒包含:烦躁、不满、生气、愤慨、恼火、怨恨、冲动；悲伤包含:失落、沮丧、孤独、难过、惆怅、思念、遗憾；恐惧包含:紧张、焦虑、担心、不安、恐惧、害怕、担忧；厌恶包含:排斥、厌倦、嫌弃、反感、冷漠；惊讶包含:惊喜、震惊、意外、困惑、好奇；内疚包含:羞耻、内疚、后悔、自责、尴尬；亲密包含:亲近、温柔、体贴、感激、信赖、喜爱。\n"
-        "actionKeywords 为总结文本中的行为关键字，例如：休息，工作，运动。\n"
-        "article 需要用第一人称日记视角，不要出现“用户”“你”。建议 250~450 个中文字符，尽量覆盖：今天发生了什么 + 我的感受/反思 + 1-2 个细节。最多不超过 800 中文字符。\n"
-        "=== 待总结内容 ===\n"
-        + body.text
-    )
+    messages_cfg = prompts.get("messages") or []
+    fields_cfg = prompts.get("fields") or {}
+    format_prefix = prompts.get("format_prefix") or "下面是写作要求，请严格参考："
+    content_prefix = prompts.get("content_prefix") or "=== 待总结内容 ===\n"
+
+    system_messages = [Message(role=m.get("role"), content=m.get("content", "")) for m in messages_cfg if (m or {}).get("role") == "system"]
+    user_base_contents = [str((m or {}).get("content", "")) for m in messages_cfg if (m or {}).get("role") == "user"]
+    fields_text = "\n".join([str(v) for _, v in fields_cfg.items()])
+    user_combined = "\n".join([c for c in user_base_contents if c.strip()])
+    user_combined = (user_combined + "\n" + format_prefix + "\n" + fields_text + "\n" + content_prefix + body.text).strip()
 
 
     req = ChatRequest(
         model=DEFAULT_MODEL,
-        messages=[
-            type("M", (), {"role": "system", "content": system_msg}),
-            type("M", (), {"role": "user", "content": SYSTEM_SUMMARY}),
-        ],
+        messages=[*system_messages, Message(role="user", content=user_combined)],
         max_completion_tokens=2000,
     )
-
+    logger.info("daily summary request"+str(req))
     raw = await smart_call(req)
+    logger.info("daily summary response"+raw)
     try:
         s = str(raw)
         logger.info("LLM raw output len=%d head=%s", len(s), s)
