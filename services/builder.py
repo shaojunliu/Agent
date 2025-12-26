@@ -4,15 +4,8 @@ from services.llm_clients import DEFAULT_MODEL
 from models.chat_models import ChatRequest, Message
 
 def build_req_from_payload(payload: dict | None, raw_text: str) -> ChatRequest:
-    """
-    兼容：
-      - {"message":"你好"} / {"prompt":"..."}
-      - {"messages":[{"role":"user","content":"hi"}], "model":"...", "temperature":0.7}
-      - {"max_tokens":64} / {"max_completion_tokens":64}
-    """
     b = ChatRequest.builder()
 
-    # model
     model = None
     if isinstance(payload, dict):
         model = payload.get("model")
