@@ -73,6 +73,8 @@ async def summarize(body: SummaryReq):
             articleTitle="",
             model="",
             tokenUsageJson="",
+            analyzeResult="",
+            memoryPoint="",
         )
         # 解析成功 → 填入，有哪些给哪些
     return SummarizeResultResp(
@@ -82,6 +84,8 @@ async def summarize(body: SummaryReq):
         articleTitle=_clean_text(obj.get("articleTitle", "")),
         model=_clean_text(obj.get("model", "")),
         tokenUsageJson=_as_str(obj.get("tokenUsageJson", "")),
+        analyzeResult=_clean_text(obj.get("analyzeResult", "")),
+        memoryPoint=_clean_text(obj.get("memoryPoint", "")),
     )
 
 

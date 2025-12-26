@@ -23,3 +23,5 @@ class SummarizeResultResp(BaseModel):
     articleTitle: str
     model: str = "default"
     tokenUsageJson: str = ""
+    analyzeResult: str
+    memoryPoint: str
