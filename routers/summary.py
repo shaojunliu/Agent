@@ -43,10 +43,40 @@ async def summarize(body: SummaryReq):
     user_messages_cfg = prompts.get("userMessages") or []
     content_prefix = prompts.get("content_prefix") or "=== 待总结内容 ===\n"
 
-    system_messages = [Message(role=m.get("role"), content=m.get("content", "")) for m in system_messages_cfg if (m or {}).get("role") == "system"]
-    user_messages = [str((m or {}).get("content", "")) for m in user_messages_cfg if (m or {}).get("role") == "user"]
-    user_combined = "\n".join([c for c in user_messages if c.strip()])
-    user_combined = (user_combined + "\n" + content_prefix + body.text).strip()
+    system_messages = [
+        Message(role=m.get("role"), content=m.get("content", ""))
+        for m in system_messages_cfg
+        if (m or {}).get("role") == "system"
+    ]
+
+    user_messages = [
+        str((m or {}).get("content", ""))
+        for m in user_messages_cfg
+        if (m or {}).get("role") == "user"
+    ]
+
+    # === 用户之前的每日总结 ===
+    pre_summary_block = ""
+    if getattr(body, "preDailySummary", None):
+        try:
+            pre_summary_json = json.dumps(
+                [item.dict() for item in body.preDailySummary],
+                ensure_ascii=False
+            )
+            pre_summary_block = "===用户之前的每日总结===\n" + pre_summary_json.strip()
+        except Exception:
+            logger.exception("Failed to serialize preDailySummary")
+
+    # === 待总结内容 ===
+    user_main_block = content_prefix + body.text
+
+    user_combined = "\n".join([
+        c for c in [
+            "\n".join([c for c in user_messages if c.strip()]),
+            pre_summary_block,
+            user_main_block
+        ] if c
+    ])
 
 
     req = ChatRequest(
