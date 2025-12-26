@@ -39,16 +39,14 @@ async def summarize(body: SummaryReq):
         logger.exception("Failed to load summary prompts json")
         raise HTTPException(status_code=500, detail="summary prompts json 加载失败")
 
-    messages_cfg = prompts.get("messages") or []
-    fields_cfg = prompts.get("fields") or {}
-    format_prefix = prompts.get("format_prefix") or "下面是写作要求，请严格参考："
+    system_messages_cfg = prompts.get("systemMessages") or []
+    user_messages_cfg = prompts.get("userMessages") or []
     content_prefix = prompts.get("content_prefix") or "=== 待总结内容 ===\n"
 
-    system_messages = [Message(role=m.get("role"), content=m.get("content", "")) for m in messages_cfg if (m or {}).get("role") == "system"]
-    user_base_contents = [str((m or {}).get("content", "")) for m in messages_cfg if (m or {}).get("role") == "user"]
-    fields_text = "\n".join([str(v) for _, v in fields_cfg.items()])
-    user_combined = "\n".join([c for c in user_base_contents if c.strip()])
-    user_combined = (user_combined + "\n" + format_prefix + "\n" + fields_text + "\n" + content_prefix + body.text).strip()
+    system_messages = [Message(role=m.get("role"), content=m.get("content", "")) for m in system_messages_cfg if (m or {}).get("role") == "system"]
+    user_messages = [str((m or {}).get("content", "")) for m in user_messages_cfg if (m or {}).get("role") == "user"]
+    user_combined = "\n".join([c for c in user_messages if c.strip()])
+    user_combined = (user_combined + "\n" + content_prefix + body.text).strip()
 
 
     req = ChatRequest(
