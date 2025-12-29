@@ -3,9 +3,11 @@
 import json
 import os
 import logging
+from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from services.llm_clients import call_qwen, DEFAULT_MODEL
-from models.chat_models import ChatRequest, Message
+from models.chat_models import ChatRequest
+from typing import Any, Dict, List
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
@@ -58,6 +60,252 @@ async def ws_chat(ws: WebSocket):
             await ws.send_json({"reply": reply})
     except WebSocketDisconnect:
         return
+    
+
+
+def _stringify_value(v: Any) -> str:
+    """Convert payload values into a compact string for prompt injection."""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float, bool)):
+        return str(v)
+    # lists/dicts -> json
+    try:
+        return json.dumps(v, ensure_ascii=False)
+    except Exception:
+        return str(v)
+
+
+def _parse_dt(x: Any) -> datetime | None:
+    """Best-effort parse timestamps/dates."""
+    if x is None:
+        return None
+    if isinstance(x, (int, float)):
+        try:
+            ts = float(x)
+            # ms -> s
+            if ts > 1e12:
+                ts = ts / 1000.0
+            return datetime.fromtimestamp(ts)
+        except Exception:
+            return None
+    if not isinstance(x, str):
+        return None
+    s = x.strip()
+    if not s:
+        return None
+    s = s.replace("/", "-")
+    if s.endswith("Z"):
+        s = s[:-1]
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        pass
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%Y%m%d",
+        "%Y%m%d%H%M%S",
+    ):
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _extract_item_dt(item: Any) -> datetime | None:
+    """Extract a datetime from common fields in a dict item."""
+    if not isinstance(item, dict):
+        return None
+    for k in (
+        "time",
+        "timestamp",
+        "ts",
+        "createdAt",
+        "created_at",
+        "date",
+        "datetime",
+        "summaryDate",
+        "summary_date",
+    ):
+        if k in item:
+            dt = _parse_dt(item.get(k))
+            if dt is not None:
+                return dt
+    return None
+
+
+def _sort_items_closest_to(items: List[Any], pivot: datetime | None) -> List[Any]:
+    """Sort by closeness to pivot (smallest abs delta first). If no pivot, sort newest first."""
+    indexed = list(enumerate(items))
+
+    def key_fn(t):
+        idx, it = t
+        dt = _extract_item_dt(it)
+        if dt is None:
+            # no time info -> push to end, stable order
+            return (1, 10**18, idx)
+        if pivot is None:
+            # newest first
+            return (0, -dt.timestamp(), idx)
+        return (0, abs((dt - pivot).total_seconds()), idx)
+
+    indexed.sort(key=key_fn)
+    return [it for _, it in indexed]
+
+
+def _render_messages_value(v: Any) -> str:
+    """Render list of {role,content} into compact lines."""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        lines: List[str] = []
+        for item in v:
+            if isinstance(item, dict):
+                role = _stringify_value(item.get("role", "")).strip()
+                content = _stringify_value(item.get("content", "")).strip()
+                if not content:
+                    continue
+                if role == "user":
+                    lines.append(f"U:{content}")
+                elif role == "assistant":
+                    lines.append(f"A:{content}")
+                else:
+                    lines.append(content)
+            else:
+                s = _stringify_value(item).strip()
+                if s:
+                    lines.append(s)
+        return "\n".join(lines)
+    return _stringify_value(v)
+
+
+def _get_payload_value(payload: Any, key: str) -> Any:
+    """Prefer payload[key]; if missing/None, fallback to payload['args'][key]."""
+    if not isinstance(payload, dict):
+        return None
+    if key in payload and payload.get(key) is not None:
+        return payload.get(key)
+    args = payload.get("args")
+    if isinstance(args, dict):
+        return args.get(key)
+    return None
+
+
+def _render_prechat_value(v: Any, pivot: datetime | None) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        items = _sort_items_closest_to(v, pivot)
+        return _render_messages_value(items)
+    if isinstance(v, dict):
+        # best-effort: try common message list fields
+        for k in ("messages", "items", "list"):
+            if k in v and isinstance(v.get(k), list):
+                return _render_messages_value(_sort_items_closest_to(v.get(k), pivot))
+    return _stringify_value(v)
+
+
+def _render_predaily_summary_value(v: Any, pivot: datetime | None) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        items = _sort_items_closest_to(v, pivot)
+        lines: List[str] = []
+        for it in items:
+            if not isinstance(it, dict):
+                s = _stringify_value(it).strip()
+                if s:
+                    lines.append(s)
+                continue
+            dt = _extract_item_dt(it)
+            date_s = dt.strftime("%Y-%m-%d") if dt is not None else _stringify_value(it.get("summaryDate") or it.get("summary_date") or "").strip()
+            title = _stringify_value(it.get("articleTitle") or it.get("title") or "").strip()
+            memory = _stringify_value(it.get("memoryPoint") or "").strip()
+            analyze = _stringify_value(it.get("analyzeResult") or "").strip()
+            article = _stringify_value(it.get("article") or it.get("summary") or "").strip()
+
+            head_parts: List[str] = []
+            if date_s:
+                head_parts.append(date_s)
+            if title:
+                head_parts.append(title)
+            head = " ".join(head_parts).strip()
+
+            extra = memory or analyze or article
+            if extra:
+                # truncate to save tokens
+                if len(extra) > 160:
+                    extra = extra[:160] + "…"
+                lines.append(f"{head}: {extra}" if head else extra)
+            elif head:
+                lines.append(head)
+        return "\n".join([x for x in lines if x])
+
+    if isinstance(v, dict):
+        for k in ("items", "list", "summaries"):
+            if k in v and isinstance(v.get(k), list):
+                return _render_predaily_summary_value(v.get(k), pivot)
+    return _stringify_value(v)
+
+
+def build_prompt_messages(prompts: Dict[str, Any], payload: Dict[str, Any]) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    pivot = _parse_dt(payload.get("currentTime")) if isinstance(payload, dict) else None
+
+    def _process(template: Dict[str, Any]) -> None:
+        role = template.get("role")
+        content = template.get("content")
+        if not role or content is None:
+            return
+
+        needArgs = template.get("needArgs") or []
+        # needArgs empty => keep content
+        if not needArgs:
+            out.append({"role": str(role), "content": str(content)})
+            return
+
+        # needArgs non-empty => all must exist and not None
+        resolved: Dict[str, Any] = {}
+        for k in needArgs:
+            v = _get_payload_value(payload, str(k))
+            if v is None:
+                return  # skip this message
+            resolved[str(k)] = v
+
+        rendered = str(content)
+
+        # Standard replacements: {arg}
+        for k, v in resolved.items():
+            if k == "preChat":
+                rendered_v = _render_prechat_value(v, pivot)
+            elif k == "preDailySummary":
+                rendered_v = _render_predaily_summary_value(v, pivot)
+            else:
+                rendered_v = _stringify_value(v)
+            rendered = rendered.replace("{" + str(k) + "}", rendered_v)
+
+        out.append({"role": str(role), "content": rendered})
+
+    for m in (prompts.get("systemMessages") or []):
+        if isinstance(m, dict):
+            _process(m)
+
+    for m in (prompts.get("userMessages") or []):
+        if isinstance(m, dict):
+            _process(m)
+
+    return out
 
 def _build_chat_request(payload: dict | None, raw_text: str, prompts: dict) -> ChatRequest:
     b = ChatRequest.builder()
@@ -76,106 +324,14 @@ def _build_chat_request(payload: dict | None, raw_text: str, prompts: dict) -> C
         if isinstance(mt, int):
             b.max_completion_tokens(mt)
 
-    # 1. Default system message
-    system_msgs_cfg = prompts.get("systemMessages") or []
-    for m in system_msgs_cfg:
-        role = m.get("role")
-        content = m.get("content")
-        if role == "system" and content:
-            b.addMessage("system", content)
-
+    # messages (built from chat_prompts.json)
     if isinstance(payload, dict):
-        arr = payload.get("messages")
-        preChat = payload.get("preChat")
-        preDailySummary = payload.get("preDailySummary")
-        args = payload.get("args") or {}
-        lng = args.get("lng")
-        lat = args.get("lat")
-
-        # 准备数据片段
-        location_text = ""
-        history_text = ""
-        summary_text = ""
-        current_msg_text = ""
-
-        # A. Location Context
-        loc_cfg = prompts.get("locationContext") or {}
-        template = loc_cfg.get("template", "")
-        
-        if isinstance(lng, (int, float)) and isinstance(lat, (int, float)):
-            location_text = template.replace("{lng}", f"{lng:.6f}").replace("{lat}", f"{lat:.6f}")
-        elif (isinstance(lng, str) and lng.strip()) and (isinstance(lat, str) and lat.strip()):
-            location_text = template.replace("{lng}", lng.strip()).replace("{lat}", lat.strip())
-
-        # B. History & Summary Labels
-        hist_labels = prompts.get("historyLabels") or {}
-        label_user = hist_labels.get("user", "[历史会话-用户] ")
-        label_assistant = hist_labels.get("assistant", "[历史会话-助手] ")
-        label_unknown = hist_labels.get("unknown", "[历史会话] ")
-        label_summary = hist_labels.get("summary", "[过往摘要记忆] ")
-
-        # C. History Text
-        if isinstance(preChat, list):
-            lines = []
-            for item in preChat:
-                role = (item or {}).get("role")
-                content = (item or {}).get("content")
-                if not (isinstance(content, str) and content.strip()):
-                    continue
-                text = content.strip()
-                if role == "user":
-                    lines.append(f"{label_user}{text}")
-                elif role == "assistant":
-                    lines.append(f"{label_assistant}{text}")
-                else:
-                    lines.append(f"{label_unknown}{text}")
-            if lines:
-                history_text = "\n".join(lines)
-
-        # D. Daily Summary Text
-        if isinstance(preDailySummary, list):
-            lines = []
-            for summary in preDailySummary:
-                text = (summary or {}).get("summary") or (summary or {}).get("content")
-                if isinstance(text, str) and text.strip():
-                    lines.append(f"{label_summary}{text.strip()}")
-            if lines:
-                summary_text = "\n".join(lines)
-
-        # E. Current Messages Text
-        if isinstance(arr, list) and arr:
-            # 如果是一个list，我们也把它拼接成文本
-            lines = []
-            for m in arr:
-                role = (m or {}).get("role")
-                content = (m or {}).get("content")
-                if isinstance(content, str) and content.strip():
-                    # 这里假设当前对话也用 label_user/assistant 标记?
-                    # 用户需求是"用户本次消息"，通常指最后一句。
-                    # 如果arr是多条，我们直接拼接内容。
-                    lines.append(content.strip())
-            if lines:
-                current_msg_text = "\n".join(lines)
-        else:
-            msg = payload.get("message") or payload.get("prompt")
-            if isinstance(msg, str) and msg.strip():
-                current_msg_text = msg.strip()
-            elif raw_text.strip():
-                current_msg_text = raw_text.strip()
-
-        # F. 构建 User Messages (从配置读取并替换占位符)
-        user_msgs_cfg = prompts.get("userMessages") or []
-        for m in user_msgs_cfg:
+        messages = build_prompt_messages(prompts, payload)
+        for m in messages:
             role = m.get("role")
-            content_tpl = m.get("content")
-            if role == "user" and content_tpl:
-                # 替换占位符
-                final_content = content_tpl.replace("{location}", location_text) \
-                                           .replace("{history}", history_text) \
-                                           .replace("{summary}", summary_text) \
-                                           .replace("{message}", current_msg_text)
-                # 清理多余空行 (可选，但通常好一点)
-                b.addMessage("user", final_content)
+            content = m.get("content")
+            if role and content is not None:
+                b.addMessage(role, content)
 
     return b.build()    
 
