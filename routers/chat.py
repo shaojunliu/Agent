@@ -18,9 +18,21 @@ async def ws_chat(ws: WebSocket):
     try:
         while True:
             try:
-                raw = await ws.receive_text()
-            except Exception:
-                raw = (await ws.receive_bytes()).decode("utf-8", errors="replace")
+                msg = await ws.receive()
+            except WebSocketDisconnect:
+                logger.info("[ws] client disconnected")
+                break
+
+            if msg.get("type") == "websocket.disconnect":
+                logger.info("[ws] client disconnected: %s", msg)
+                break
+
+            if msg.get("text") is not None:
+                raw = msg["text"]
+            elif msg.get("bytes") is not None:
+                raw = msg["bytes"].decode("utf-8", errors="replace")
+            else:
+                continue
 
             payload = None
             try:
