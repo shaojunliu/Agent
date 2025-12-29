@@ -34,9 +34,7 @@
       "role": "system",
       "content": "户状态与上下文仅用于理解语境，不代表用户本次需求；除非用户在本次 message 明确提到，否则不要主动输出天气/穿衣/带伞/温度等相关内容",
       "needArgs":[]
-    }
-  ],
-  "userMessages": [
+    },
     {
       "role": "user",
       "content": "仅供你理解用户状态与上下文。不要逐条回应、不要复述、不要主动汇报时间。[用户当前时间] {currentTime}。 如果判断当前messagege早(约05:00-09:00)或较晚(约23:00-03:00)的对话，注意人文关怀，简短关心用户作息/疲劳，并在合适时提醒第二天的天气与安排。但不主动汇报或重复这些信息，除非用户表达相关需求",
@@ -56,7 +54,9 @@
       "role": "user",
       "content": "仅供你理解用户状态与上下文。不要逐条回应、不要复述、不要主动汇报时间。[过往每日总结] {preDailySummary}",
       "needArgs": ["preDailySummary"]
-    },
+    }
+  ],
+  "userMessages": [
     {
       "role": "user",
       "content": "{message}",
