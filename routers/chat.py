@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from services.llm_clients import call_qwen, DEFAULT_MODEL
 from models.chat_models import ChatRequest, Message
+from typing import Any, Dict, List, Optional
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
@@ -58,6 +59,103 @@ async def ws_chat(ws: WebSocket):
             await ws.send_json({"reply": reply})
     except WebSocketDisconnect:
         return
+    
+
+
+def _stringify_value(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float, bool)):
+        return str(v)
+    try:
+        return json.dumps(v, ensure_ascii=False)
+    except Exception:
+        return str(v)
+
+
+def _render_messages_value(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        lines: List[str] = []
+        for item in v:
+            if isinstance(item, dict):
+                role = _stringify_value(item.get("role", "")).strip()
+                content = _stringify_value(item.get("content", "")).strip()
+                if role or content:
+                    lines.append(f"[{role}] {content}".strip())
+            else:
+                s = _stringify_value(item).strip()
+                if s:
+                    lines.append(s)
+        return "\n".join(lines)
+    return _stringify_value(v)
+
+
+def _get_payload_value(payload: Any, key: str) -> Any:
+    if not isinstance(payload, dict):
+        return None
+    if key in payload:
+        return payload.get(key)
+    # backward compatibility: lng/lat may be nested under args
+    args = payload.get("args")
+    if isinstance(args, dict):
+        return args.get(key)
+    return None
+
+
+def build_prompt_messages(prompts: Dict[str, Any], payload: Dict[str, Any]) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+
+    def _process(template: Dict[str, Any]) -> None:
+        role = template.get("role")
+        content = template.get("content")
+        if not role or content is None:
+            return
+
+        needArgs = template.get("needArgs") or []
+        # needArgs empty => keep content
+        if not needArgs:
+            out.append({"role": str(role), "content": str(content)})
+            return
+
+        # needArgs non-empty => all must exist and not None
+        resolved: Dict[str, Any] = {}
+        for k in needArgs:
+            v = _get_payload_value(payload, str(k))
+            if v is None:
+                return  # skip this message
+            resolved[str(k)] = v
+
+        rendered = str(content)
+
+        # Special-case: when needArgs include 'messages', allow injecting it into {content}
+        if "message" in resolved:
+            msg_text = _render_messages_value(resolved["message"])
+            if "{content}" in rendered:
+                rendered = rendered.replace("{content}", msg_text)
+            if "{message}" in rendered:
+                rendered = rendered.replace("{message}", msg_text)
+
+        # Standard replacements: {arg}
+        for k, v in resolved.items():
+            rendered = rendered.replace("{" + str(k) + "}", _stringify_value(v))
+
+        out.append({"role": str(role), "content": rendered})
+
+    for m in (prompts.get("systemMessages") or []):
+        if isinstance(m, dict):
+            _process(m)
+
+    for m in (prompts.get("userMessages") or []):
+        if isinstance(m, dict):
+            _process(m)
+
+    return out
 
 def _build_chat_request(payload: dict | None, raw_text: str, prompts: dict) -> ChatRequest:
     b = ChatRequest.builder()
@@ -76,106 +174,14 @@ def _build_chat_request(payload: dict | None, raw_text: str, prompts: dict) -> C
         if isinstance(mt, int):
             b.max_completion_tokens(mt)
 
-    # 1. Default system message
-    system_msgs_cfg = prompts.get("systemMessages") or []
-    for m in system_msgs_cfg:
-        role = m.get("role")
-        content = m.get("content")
-        if role == "system" and content:
-            b.addMessage("system", content)
-
+    # messages (built from chat_prompts.json)
     if isinstance(payload, dict):
-        arr = payload.get("messages")
-        preChat = payload.get("preChat")
-        preDailySummary = payload.get("preDailySummary")
-        args = payload.get("args") or {}
-        lng = args.get("lng")
-        lat = args.get("lat")
-
-        # 准备数据片段
-        location_text = ""
-        history_text = ""
-        summary_text = ""
-        current_msg_text = ""
-
-        # A. Location Context
-        loc_cfg = prompts.get("locationContext") or {}
-        template = loc_cfg.get("template", "")
-        
-        if isinstance(lng, (int, float)) and isinstance(lat, (int, float)):
-            location_text = template.replace("{lng}", f"{lng:.6f}").replace("{lat}", f"{lat:.6f}")
-        elif (isinstance(lng, str) and lng.strip()) and (isinstance(lat, str) and lat.strip()):
-            location_text = template.replace("{lng}", lng.strip()).replace("{lat}", lat.strip())
-
-        # B. History & Summary Labels
-        hist_labels = prompts.get("historyLabels") or {}
-        label_user = hist_labels.get("user", "[历史会话-用户] ")
-        label_assistant = hist_labels.get("assistant", "[历史会话-助手] ")
-        label_unknown = hist_labels.get("unknown", "[历史会话] ")
-        label_summary = hist_labels.get("summary", "[过往摘要记忆] ")
-
-        # C. History Text
-        if isinstance(preChat, list):
-            lines = []
-            for item in preChat:
-                role = (item or {}).get("role")
-                content = (item or {}).get("content")
-                if not (isinstance(content, str) and content.strip()):
-                    continue
-                text = content.strip()
-                if role == "user":
-                    lines.append(f"{label_user}{text}")
-                elif role == "assistant":
-                    lines.append(f"{label_assistant}{text}")
-                else:
-                    lines.append(f"{label_unknown}{text}")
-            if lines:
-                history_text = "\n".join(lines)
-
-        # D. Daily Summary Text
-        if isinstance(preDailySummary, list):
-            lines = []
-            for summary in preDailySummary:
-                text = (summary or {}).get("summary") or (summary or {}).get("content")
-                if isinstance(text, str) and text.strip():
-                    lines.append(f"{label_summary}{text.strip()}")
-            if lines:
-                summary_text = "\n".join(lines)
-
-        # E. Current Messages Text
-        if isinstance(arr, list) and arr:
-            # 如果是一个list，我们也把它拼接成文本
-            lines = []
-            for m in arr:
-                role = (m or {}).get("role")
-                content = (m or {}).get("content")
-                if isinstance(content, str) and content.strip():
-                    # 这里假设当前对话也用 label_user/assistant 标记?
-                    # 用户需求是"用户本次消息"，通常指最后一句。
-                    # 如果arr是多条，我们直接拼接内容。
-                    lines.append(content.strip())
-            if lines:
-                current_msg_text = "\n".join(lines)
-        else:
-            msg = payload.get("message") or payload.get("prompt")
-            if isinstance(msg, str) and msg.strip():
-                current_msg_text = msg.strip()
-            elif raw_text.strip():
-                current_msg_text = raw_text.strip()
-
-        # F. 构建 User Messages (从配置读取并替换占位符)
-        user_msgs_cfg = prompts.get("userMessages") or []
-        for m in user_msgs_cfg:
+        messages = build_prompt_messages(prompts, payload)
+        for m in messages:
             role = m.get("role")
-            content_tpl = m.get("content")
-            if role == "user" and content_tpl:
-                # 替换占位符
-                final_content = content_tpl.replace("{location}", location_text) \
-                                           .replace("{history}", history_text) \
-                                           .replace("{summary}", summary_text) \
-                                           .replace("{message}", current_msg_text)
-                # 清理多余空行 (可选，但通常好一点)
-                b.addMessage("user", final_content)
+            content = m.get("content")
+            if role and content is not None:
+                b.addMessage(role, content)
 
     return b.build()    
 
