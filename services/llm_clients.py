@@ -2,6 +2,10 @@
 
 import httpx
 from fastapi import HTTPException
+import logging
+import time
+import json
+logger = logging.getLogger("llm.call")
 from core.config import DASHSCOPE_API_KEY, OPEN_API_KEY, DASH_URL, OPEN_URL, DEFAULT_MODEL
 from models.chat_models import ChatRequest
 
@@ -43,15 +47,54 @@ def extract_reply(data: dict) -> str:
                 return text
     return str(data)
 
+def _safe_json(obj):
+    """Safely json-serialize any object for logging."""
+    try:
+        return json.dumps(obj, ensure_ascii=False)
+    except Exception:
+        try:
+            return json.dumps(str(obj), ensure_ascii=False)
+        except Exception:
+            return "<unserializable>"
+
 async def call_gpt(req: ChatRequest) -> str:
     headers = {"Authorization": f"Bearer {OPEN_API_KEY}"}
     payload = req.to_dict()
+
+    logger.info(
+        "[LLM][GPT][REQUEST] %s",
+        _safe_json({
+            "headers": headers,
+            "payload": payload,
+        }),
+    )
+
+    start = time.time()
     timeout = httpx.Timeout(20.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(OPEN_URL, headers=headers, json=payload)
+    cost_ms = int((time.time() - start) * 1000)
+
     if r.status_code != 200:
+        logger.error(
+            "[LLM][GPT][ERROR] costMs=%s response=%s",
+            cost_ms,
+            r.text,
+        )
         raise HTTPException(status_code=r.status_code, detail=r.text + " err from gpt")
-    return extract_reply(r.json())
+
+    try:
+        resp_json = r.json()
+    except Exception:
+        resp_json = r.text
+
+    logger.info(
+        "[LLM][GPT][RESPONSE] costMs=%s %s",
+        cost_ms,
+        _safe_json(resp_json),
+    )
+
+    return extract_reply(resp_json)
 
 async def call_qwen(req: ChatRequest) -> str:
     headers = {"Authorization": f"Bearer {DASHSCOPE_API_KEY}"}
@@ -65,12 +108,43 @@ async def call_qwen(req: ChatRequest) -> str:
         payload["parameters"]["temperature"] = req.temperature
     if req.max_completion_tokens is not None:
         payload["parameters"]["max_tokens"] = req.max_completion_tokens
+
+    logger.info(
+        "[LLM][QWEN][REQUEST] %s",
+        _safe_json({
+            "headers": headers,
+            "payload": payload,
+        }),
+    )
+
+    start = time.time()
     timeout = httpx.Timeout(300.0, connect=10.0)
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(DASH_URL, headers=headers, json=payload)
+
+    cost_ms = int((time.time() - start) * 1000)
+
     if r.status_code != 200:
+        logger.error(
+            "[LLM][QWEN][ERROR] costMs=%s response=%s",
+            cost_ms,
+            r.text,
+        )
         raise HTTPException(status_code=r.status_code, detail=r.text)
-    return extract_reply(r.json())
+
+    try:
+        resp_json = r.json()
+    except Exception:
+        resp_json = r.text
+
+    logger.info(
+        "[LLM][QWEN][RESPONSE] costMs=%s %s",
+        cost_ms,
+        _safe_json(resp_json),
+    )
+
+    return extract_reply(resp_json)
 
 async def smart_call(req: ChatRequest) -> str:
     """
