@@ -5,7 +5,12 @@ from fastapi import HTTPException
 import logging
 import time
 import json
-logger = logging.getLogger("llm.call")
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("uvicorn.error")
+logger.setLevel(logging.INFO)
+logger.propagate = True
+
 from core.config import DASHSCOPE_API_KEY, OPEN_API_KEY, DASH_URL, OPEN_URL, DEFAULT_MODEL
 from models.chat_models import ChatRequest
 
