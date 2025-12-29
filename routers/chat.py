@@ -150,6 +150,14 @@ def _extract_item_dt(item: Any) -> datetime | None:
                 return dt
     return None
 
+def _fmt_dt(dt: datetime, pivot: datetime | None) -> str:
+    """Compact datetime prefix for prompts. Uses month-day + HH:MM in pivot's local interpretation."""
+    try:
+        # Keep it short: MM-DD HH:MM
+        return dt.strftime("%m-%d %H:%M")
+    except Exception:
+        return ""
+
 
 def _sort_items_closest_to(items: List[Any], pivot: datetime | None) -> List[Any]:
     """Sort by closeness to pivot (smallest abs delta first). If no pivot, sort newest first."""
@@ -170,8 +178,8 @@ def _sort_items_closest_to(items: List[Any], pivot: datetime | None) -> List[Any
     return [it for _, it in indexed]
 
 
-def _render_messages_value(v: Any) -> str:
-    """Render list of {role,content} into compact lines."""
+def _render_messages_value(v: Any, pivot: datetime | None = None) -> str:
+    """Render list of messages into compact lines. Preserve timestamps when present."""
     if v is None:
         return ""
     if isinstance(v, str):
@@ -184,12 +192,17 @@ def _render_messages_value(v: Any) -> str:
                 content = _stringify_value(item.get("content", "")).strip()
                 if not content:
                     continue
+
+                dt = _extract_item_dt(item)
+                dt_prefix = _fmt_dt(dt, pivot) if dt is not None else ""
+                prefix = f"[{dt_prefix}] " if dt_prefix else ""
+
                 if role == "user":
-                    lines.append(f"U:{content}")
+                    lines.append(f"{prefix}U:{content}")
                 elif role == "assistant":
-                    lines.append(f"A:{content}")
+                    lines.append(f"{prefix}A:{content}")
                 else:
-                    lines.append(content)
+                    lines.append(f"{prefix}{content}")
             else:
                 s = _stringify_value(item).strip()
                 if s:
@@ -217,12 +230,12 @@ def _render_prechat_value(v: Any, pivot: datetime | None) -> str:
         return v
     if isinstance(v, list):
         items = _sort_items_closest_to(v, pivot)
-        return _render_messages_value(items)
+        return _render_messages_value(items, pivot)
     if isinstance(v, dict):
         # best-effort: try common message list fields
         for k in ("messages", "items", "list"):
             if k in v and isinstance(v.get(k), list):
-                return _render_messages_value(_sort_items_closest_to(v.get(k), pivot))
+                return _render_messages_value(_sort_items_closest_to(v.get(k), pivot), pivot)
     return _stringify_value(v)
 
 
@@ -241,7 +254,11 @@ def _render_predaily_summary_value(v: Any, pivot: datetime | None) -> str:
                     lines.append(s)
                 continue
             dt = _extract_item_dt(it)
-            date_s = dt.strftime("%Y-%m-%d") if dt is not None else _stringify_value(it.get("summaryDate") or it.get("summary_date") or "").strip()
+            if dt is not None:
+                # include time if present
+                date_s = dt.strftime("%Y-%m-%d %H:%M")
+            else:
+                date_s = _stringify_value(it.get("summaryDate") or it.get("summary_date") or "").strip()
             title = _stringify_value(it.get("articleTitle") or it.get("title") or "").strip()
             memory = _stringify_value(it.get("memoryPoint") or "").strip()
             analyze = _stringify_value(it.get("analyzeResult") or "").strip()
