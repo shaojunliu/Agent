@@ -314,14 +314,10 @@ def build_prompt_messages(prompts: Dict[str, Any], payload: Dict[str, Any]) -> L
 
         rendered = str(content)
 
-        # Standard replacements: {arg}
+        # For now, do not do special rendering for preChat / preDailySummary.
+        # Inject raw payload values (stringify only for non-strings).
         for k, v in resolved.items():
-            if k == "preChat":
-                rendered_v = _render_prechat_value(v, pivot)
-            elif k == "preDailySummary":
-                rendered_v = _render_predaily_summary_value(v, pivot)
-            else:
-                rendered_v = _stringify_value(v)
+            rendered_v = v if isinstance(v, str) else _stringify_value(v)
             rendered = rendered.replace("{" + str(k) + "}", rendered_v)
 
         out.append({"role": str(role), "content": rendered})
