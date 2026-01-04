@@ -322,10 +322,17 @@ def build_prompt_messages(prompts: Dict[str, Any], payload: Dict[str, Any]) -> L
 
         out.append({"role": str(role), "content": rendered})
 
+    # 1) system messages (highest priority)
     for m in (prompts.get("systemMessages") or []):
         if isinstance(m, dict):
             _process(m)
 
+    # 2) context messages (optional, placed between system and user)
+    for m in (prompts.get("contextMessages") or []):
+        if isinstance(m, dict):
+            _process(m)
+
+    # 3) user messages
     for m in (prompts.get("userMessages") or []):
         if isinstance(m, dict):
             _process(m)
