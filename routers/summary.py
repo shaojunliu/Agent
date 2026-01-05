@@ -31,7 +31,7 @@ async def summarize(body: SummaryReq):
         logger.error("Summary text is empty")
         raise HTTPException(status_code=400, detail="text 不能为空")
 
-    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "summary_prompts.json")
+    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "summary_prompts_v1.json")
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
             prompts = json.load(f)

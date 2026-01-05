@@ -322,10 +322,17 @@ def build_prompt_messages(prompts: Dict[str, Any], payload: Dict[str, Any]) -> L
 
         out.append({"role": str(role), "content": rendered})
 
+    # 1) system messages (highest priority)
     for m in (prompts.get("systemMessages") or []):
         if isinstance(m, dict):
             _process(m)
 
+    # 2) context messages (optional, placed between system and user)
+    for m in (prompts.get("contextMessages") or []):
+        if isinstance(m, dict):
+            _process(m)
+
+    # 3) user messages
     for m in (prompts.get("userMessages") or []):
         if isinstance(m, dict):
             _process(m)
@@ -361,7 +368,7 @@ def _build_chat_request(payload: dict | None, raw_text: str, prompts: dict) -> C
     return b.build()    
 
 def _load_chat_prompts():
-    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "chat_prompts.json")
+    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "chat_prompts_v1.json")
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
             return json.load(f)
