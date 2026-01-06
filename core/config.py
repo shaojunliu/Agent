@@ -12,4 +12,4 @@ if not DASHSCOPE_API_KEY:
 
 DASH_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
 OPEN_URL = "https://api.openai.com/v1/chat/completions"
-DEFAULT_MODEL = "qwen-plus"
+DEFAULT_MODEL = "qwen-plus-character"
