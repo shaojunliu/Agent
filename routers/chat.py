@@ -368,7 +368,7 @@ def _build_chat_request(payload: dict | None, raw_text: str, prompts: dict) -> C
     return b.build()    
 
 def _load_chat_prompts():
-    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "chat_prompts_v1.json")
+    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "chat_prompts_v2.json")
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
             return json.load(f)
