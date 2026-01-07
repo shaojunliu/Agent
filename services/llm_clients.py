@@ -110,10 +110,10 @@ async def call_qwen(req: ChatRequest) -> str:
         "parameters": {"result_format": "text"},
     }
     if req.temperature is not None:
-        payload["parameters"]["temperature"] = req.temperature
+        payload["parameters"]["temperature"] = 0.6
     if req.max_completion_tokens is not None:
         payload["parameters"]["max_tokens"] = req.max_completion_tokens
-
+    payload["parameters"]["repetition_penalty"] = 1.15
     logger.info(
         "[LLM][QWEN][REQUEST] %s",
         _safe_json({
