@@ -5,7 +5,7 @@ import os
 import logging
 from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
-from services.llm_clients import call_qwen, DEFAULT_MODEL
+from services.llm_clients import call_qwen, DEFAULT_CHAT_MODEL
 from models.chat_models import ChatRequest
 from typing import Any, Dict, List
 
@@ -346,7 +346,7 @@ def _build_chat_request(payload: dict | None, raw_text: str, prompts: dict) -> C
     model = None
     if isinstance(payload, dict):
         model = payload.get("model")
-    b.model(model or DEFAULT_MODEL)
+    b.model(model or DEFAULT_CHAT_MODEL)
 
     # params
     if isinstance(payload, dict):
