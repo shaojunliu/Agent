@@ -11,10 +11,10 @@ logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
 logger.propagate = True
 
-from core.config import DASHSCOPE_API_KEY, OPEN_API_KEY, DASH_URL, OPEN_URL, DEFAULT_MODEL
+from core.config import DASHSCOPE_API_KEY, OPEN_API_KEY, DASH_URL, OPEN_URL, DEFAULT_MODEL,DEFAULT_CHAT_MODEL
 from models.chat_models import ChatRequest
 
-__all__ = ["call_gpt", "call_qwen", "smart_call", "DEFAULT_MODEL"]
+__all__ = ["call_gpt", "call_qwen", "smart_call", "DEFAULT_MODEL","DEFAULT_CHAT_MODEL"]
 
 def _extract_text_from_choices(choices):
     if isinstance(choices, list) and choices:
