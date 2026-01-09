@@ -14,3 +14,4 @@ DASH_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/
 OPEN_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_CHAT_MODEL = "qwen-plus-character"
 DEFAULT_MODEL = "qwen-plus"
+QIANWEN_MAX = "qwen3-max"
