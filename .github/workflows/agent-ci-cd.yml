@@ -46,18 +46,24 @@ jobs:
           registry: ${{ env.ACR_REGISTRY }}
           username: ${{ env.ACR_USERNAME }}
           password: ${{ env.ACR_PASSWORD }}
+      - name: Compute image tag (Beijing time)
+        id: vars
+        run: |
+          TAG=$(TZ=Asia/Shanghai date +%Y-%m-%d-%H%M)
+          echo "image_tag=${TAG}" >> $GITHUB_OUTPUT
       - uses: docker/build-push-action@v6
-        # 单一 tag：agent 独立发布，compose 默认拉 latest 即可
         with:
           context: .
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}
 
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    env:
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
     steps:
       - name: SSH deploy
         uses: appleboy/ssh-action@v1.0.3
@@ -80,16 +86,10 @@ jobs:
               sleep $((i * 3))
             done
             cd "${{ env.DEPLOY_PATH }}"
-            # 关键：agent 独立发布，镜像只维护单一 tag=latest。
-            # 但服务器上的 compose 可能被其他流水线渲染成时间戳 tag（如 2026-01-12-1145），会导致 pull 失败。
-            # 这里在部署前强制把 compose 中 agent 的 image 重写为 ACR 的 agent:latest。
-            if [ -f "${{ env.COMPOSE_DST }}" ]; then
-              sed -i -E "s#(image:\\s*).*/agent:.*#\\1${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/agent:latest#" "${{ env.COMPOSE_DST }}" || true
-            fi
             # 若端口被旧容器占用，先清理（仅清理绑定了 8001 的容器）
             OCC=$(docker ps --format '{{.ID}} {{.Ports}}' | awk '/:8001->/ {print $1}')
             [ -n "$OCC" ] && docker rm -f $OCC || true
-            # agent 独立发布：compose 中 image 通常指向 agent:latest，这里 pull+up 即可完成更新
+            sed -i -E "s#(image:\\s*).*/agent:.*#\\1${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/agent:${IMAGE_TAG}#" "${{ env.COMPOSE_DST }}"
             docker compose -f "${{ env.COMPOSE_DST }}" pull "${{ env.SERVICE_NAME }}"
             docker compose -f "${{ env.COMPOSE_DST }}" up -d --remove-orphans "${{ env.SERVICE_NAME }}"
             docker system prune -f
