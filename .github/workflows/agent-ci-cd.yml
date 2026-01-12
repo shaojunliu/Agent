@@ -80,6 +80,12 @@ jobs:
               sleep $((i * 3))
             done
             cd "${{ env.DEPLOY_PATH }}"
+            # 关键：agent 独立发布，镜像只维护单一 tag=latest。
+            # 但服务器上的 compose 可能被其他流水线渲染成时间戳 tag（如 2026-01-12-1145），会导致 pull 失败。
+            # 这里在部署前强制把 compose 中 agent 的 image 重写为 ACR 的 agent:latest。
+            if [ -f "${{ env.COMPOSE_DST }}" ]; then
+              sed -i -E "s#(image:\\s*).*/agent:.*#\\1${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/agent:latest#" "${{ env.COMPOSE_DST }}" || true
+            fi
             # 若端口被旧容器占用，先清理（仅清理绑定了 8001 的容器）
             OCC=$(docker ps --format '{{.ID}} {{.Ports}}' | awk '/:8001->/ {print $1}')
             [ -n "$OCC" ] && docker rm -f $OCC || true
