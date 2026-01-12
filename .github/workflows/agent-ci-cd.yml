@@ -2,7 +2,7 @@ name: Agent CI/CD
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   workflow_dispatch: {}
 
 env:
@@ -21,9 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      image_tag: ${{ steps.vars.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+
       - name: Check required secrets
         run: |
           set -euo pipefail
@@ -39,6 +42,7 @@ jobs:
           ACR_REGISTRY: ${{ env.ACR_REGISTRY }}
           ACR_USERNAME: ${{ env.ACR_USERNAME }}
           ACR_PASSWORD: ${{ env.ACR_PASSWORD }}
+
       # 登录阿里云 ACR：用于 push agent 镜像
       - name: Login to ACR
         uses: docker/login-action@v3
@@ -46,11 +50,14 @@ jobs:
           registry: ${{ env.ACR_REGISTRY }}
           username: ${{ env.ACR_USERNAME }}
           password: ${{ env.ACR_PASSWORD }}
+
       - name: Compute image tag (Beijing time)
         id: vars
         run: |
+          # 强制北京时间（Asia/Shanghai）生成 tag：YYYY-MM-DD-HHMM，例如 2026-01-12-1718
           TAG=$(TZ=Asia/Shanghai date +%Y-%m-%d-%H%M)
           echo "image_tag=${TAG}" >> $GITHUB_OUTPUT
+
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -73,6 +80,8 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script_stop: true
           script: |
+            set -e
+
             # 登录阿里云 ACR（增加重试，避免偶发网络抖动导致失败）
             for i in 1 2 3; do
               echo "[deploy] docker login ${{ secrets.ACR_REGISTRY }} (try ${i}/3)"
@@ -85,11 +94,25 @@ jobs:
               fi
               sleep $((i * 3))
             done
+
             cd "${{ env.DEPLOY_PATH }}"
+
+            # 清理 compose 文件中可能混入的编辑器标记（例如 user__selection），否则 docker compose 解析会报
+            # yaml: mapping values are not allowed in this context
+            if [ -f "${{ env.COMPOSE_DST }}" ]; then
+              SEL_OPEN=$'\x3Cuser__selection\x3E'
+              SEL_CLOSE=$'\x3C/user__selection\x3E'
+              sed -i -e "s/${SEL_OPEN}//g" -e "s/${SEL_CLOSE}//g" "${{ env.COMPOSE_DST }}" || true
+            fi
+
             # 若端口被旧容器占用，先清理（仅清理绑定了 8001 的容器）
             OCC=$(docker ps --format '{{.ID}} {{.Ports}}' | awk '/:8001->/ {print $1}')
             [ -n "$OCC" ] && docker rm -f $OCC || true
+
+            # 将 compose 中 agent 镜像固定到本次构建的时间戳 tag
             sed -i -E "s#(image:\\s*).*/agent:.*#\\1${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/agent:${IMAGE_TAG}#" "${{ env.COMPOSE_DST }}"
+
             docker compose -f "${{ env.COMPOSE_DST }}" pull "${{ env.SERVICE_NAME }}"
             docker compose -f "${{ env.COMPOSE_DST }}" up -d --remove-orphans "${{ env.SERVICE_NAME }}"
+
             docker system prune -f
