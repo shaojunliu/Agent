@@ -2,11 +2,13 @@ name: Agent CI/CD
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
   workflow_dispatch: {}
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/agent
+  # 仅使用阿里云 ACR（国内服务器拉取更快更稳）
+  # 需要在 GitHub Secrets 配置：ACR_REGISTRY / ACR_NAMESPACE / ACR_USERNAME / ACR_PASSWORD
+  IMAGE_NAME: ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/agent
   DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/apps/stack' }}
   COMPOSE_DST: ${{ secrets.COMPOSE_FILE || 'docker-compose.yml' }}
   SERVICE_NAME: ${{ secrets.AGENT_SERVICE_NAME || 'agent' }}
@@ -16,23 +18,24 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      # 登录阿里云 ACR：用于 push agent 镜像
+      - name: Login to ACR
+        uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
           tags: |
+            # 单一 tag：agent 独立发布，compose 默认拉 latest 即可
             ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
   deploy:
     needs: build-and-push
@@ -46,13 +49,23 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script_stop: true
           script: |
-            # 登录 GHCR
-            echo "${{ secrets.GHCR_READ_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+            # 登录阿里云 ACR（增加重试，避免偶发网络抖动导致失败）
+            for i in 1 2 3; do
+              echo "[deploy] docker login ${{ secrets.ACR_REGISTRY }} (try ${i}/3)"
+              if echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ secrets.ACR_REGISTRY }}" -u "${{ secrets.ACR_USERNAME }}" --password-stdin; then
+                break
+              fi
+              if [ "$i" = "3" ]; then
+                echo "[deploy][FATAL] docker login ACR failed after 3 attempts"
+                exit 1
+              fi
+              sleep $((i * 3))
+            done
             cd "${{ env.DEPLOY_PATH }}"
             # 若端口被旧容器占用，先清理（仅清理绑定了 8001 的容器）
             OCC=$(docker ps --format '{{.ID}} {{.Ports}}' | awk '/:8001->/ {print $1}')
             [ -n "$OCC" ] && docker rm -f $OCC || true
-            # 拉镜像并重启 agent
+            # agent 独立发布：compose 中 image 通常指向 agent:latest，这里 pull+up 即可完成更新
             docker compose -f "${{ env.COMPOSE_DST }}" pull "${{ env.SERVICE_NAME }}"
             docker compose -f "${{ env.COMPOSE_DST }}" up -d --remove-orphans "${{ env.SERVICE_NAME }}"
             docker system prune -f
