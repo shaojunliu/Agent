@@ -110,7 +110,11 @@ jobs:
               sed -i -E 's#^(\s*logging):.*#\1:#' "${{ env.COMPOSE_DST }}" || true
               sed -i -E 's#^(\s*tags):.*\|#\1: |#' "${{ env.COMPOSE_DST }}" || true
 
-              # 3) 打印一次 config 校验（失败时输出关键行，便于定位）
+              # 3) 先把 agent 的 image 修正为本次构建 tag（否则若原文件是 image: .../agent: 会导致 config 直接失败）
+              # 同时兼容 image: .../agent: 与 image: .../agent:<tag> 两种情况，且保留原缩进
+              sed -i -E "s#(^[[:space:]]*image:[[:space:]]*).*/agent(:.*)?#\\1${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/agent:${IMAGE_TAG}#" "${{ env.COMPOSE_DST }}"
+
+              # 4) 打印一次 config 校验（失败时输出关键行，便于定位）
               if ! docker compose -f "${{ env.COMPOSE_DST }}" config >/dev/null 2>&1; then
                 echo "[deploy][FATAL] docker compose config failed, showing lines 45-75 of ${COMPOSE_DST}:"
                 nl -ba "${{ env.COMPOSE_DST }}" | sed -n '45,75p' || true
@@ -121,9 +125,6 @@ jobs:
             # 若端口被旧容器占用，先清理（仅清理绑定了 8001 的容器）
             OCC=$(docker ps --format '{{.ID}} {{.Ports}}' | awk '/:8001->/ {print $1}')
             [ -n "$OCC" ] && docker rm -f $OCC || true
-
-            # 将 compose 中 agent 镜像固定到本次构建的时间戳 tag
-            sed -i -E "s#(^[[:space:]]*image:[[:space:]]*).*/agent:.*#\\1${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/agent:${IMAGE_TAG}#" "${{ env.COMPOSE_DST }}"
 
             docker compose -f "${{ env.COMPOSE_DST }}" pull "${{ env.SERVICE_NAME }}"
             docker compose -f "${{ env.COMPOSE_DST }}" up -d --remove-orphans "${{ env.SERVICE_NAME }}"
