@@ -100,9 +100,7 @@ jobs:
             # 清理 compose 文件中可能混入的编辑器标记（例如 user__selection），否则 docker compose 解析会报
             # yaml: mapping values are not allowed in this context
             if [ -f "${{ env.COMPOSE_DST }}" ]; then
-              SEL_OPEN=$'\x3Cuser__selection\x3E'
-              SEL_CLOSE=$'\x3C/user__selection\x3E'
-              sed -i -e "s/${SEL_OPEN}//g" -e "s/${SEL_CLOSE}//g" "${{ env.COMPOSE_DST }}" || true
+              sed -i -e $'s#\x3Cuser__selection\x3E##g' -e $'s#\x3C/user__selection\x3E##g' "${{ env.COMPOSE_DST }}" || true
             fi
 
             # 若端口被旧容器占用，先清理（仅清理绑定了 8001 的容器）
