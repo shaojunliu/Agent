@@ -97,10 +97,21 @@ jobs:
 
             cd "${{ env.DEPLOY_PATH }}"
 
-            # 清理 compose 文件中可能混入的编辑器标记（例如 user__selection），否则 docker compose 解析会报
-            # yaml: mapping values are not allowed in this context
             if [ -f "${{ env.COMPOSE_DST }}" ]; then
-              sed -i -e $'s#\x3Cuser__selection\x3E##g' -e $'s#\x3C/user__selection\x3E##g' "${{ env.COMPOSE_DST }}" || true
+              # 1) 清理任意形如 <...> 的编辑器/系统标记（不仅仅是 user__selection）
+              sed -i -E 's#<[^>]+>##g' "${{ env.COMPOSE_DST }}" || true
+
+              # 2) 常见被污染的 YAML key 兜底修复：services:/logging:/tags: 等冒号后被拼接了脏内容
+              sed -i -E 's#^(\s*services):.*#\1:#' "${{ env.COMPOSE_DST }}" || true
+              sed -i -E 's#^(\s*logging):.*#\1:#' "${{ env.COMPOSE_DST }}" || true
+              sed -i -E 's#^(\s*tags):.*\|#\1: |#' "${{ env.COMPOSE_DST }}" || true
+
+              # 3) 打印一次 config 校验（失败时输出关键行，便于定位）
+              if ! docker compose -f "${{ env.COMPOSE_DST }}" config >/dev/null 2>&1; then
+                echo "[deploy][FATAL] docker compose config failed, showing lines 45-75 of ${COMPOSE_DST}:"
+                nl -ba "${{ env.COMPOSE_DST }}" | sed -n '45,75p' || true
+                exit 1
+              fi
             fi
 
             # 若端口被旧容器占用，先清理（仅清理绑定了 8001 的容器）
