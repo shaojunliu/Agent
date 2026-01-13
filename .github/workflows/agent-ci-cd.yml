@@ -82,6 +82,10 @@ jobs:
           script: |
             set -e
 
+            # 将本次构建生成的镜像 tag 传入远端（ssh-action 不会自动传递 job env）
+            IMAGE_TAG='${{ needs.build-and-push.outputs.image_tag }}'
+            echo "[deploy] IMAGE_TAG=${IMAGE_TAG}"
+
             # 登录阿里云 ACR（增加重试，避免偶发网络抖动导致失败）
             for i in 1 2 3; do
               echo "[deploy] docker login ${{ secrets.ACR_REGISTRY }} (try ${i}/3)"
@@ -119,7 +123,7 @@ jobs:
             [ -n "$OCC" ] && docker rm -f $OCC || true
 
             # 将 compose 中 agent 镜像固定到本次构建的时间戳 tag
-            sed -i -E "s#(image:\\s*).*/agent:.*#\\1${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/agent:${IMAGE_TAG}#" "${{ env.COMPOSE_DST }}"
+            sed -i -E "s#(^[[:space:]]*image:[[:space:]]*).*/agent:.*#\\1${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/agent:${IMAGE_TAG}#" "${{ env.COMPOSE_DST }}"
 
             docker compose -f "${{ env.COMPOSE_DST }}" pull "${{ env.SERVICE_NAME }}"
             docker compose -f "${{ env.COMPOSE_DST }}" up -d --remove-orphans "${{ env.SERVICE_NAME }}"
