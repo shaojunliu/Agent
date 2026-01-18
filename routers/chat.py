@@ -44,31 +44,21 @@ async def ws_chat(ws: WebSocket):
                 pass
 
             try:
-                # 每次请求都重新加载配置，或者也可以全局加载一次。
-                # 既然是 '直接调用json文件'，为了支持热更新，每次加载虽然有开销，但符合 '修改直接生效' 的直觉。
-                # 但考虑到性能，生产环境通常缓存。这里按用户要求，确保修改生效。
                 prompts = _load_chat_prompts()
                 req_obj = _build_chat_request(payload, raw, prompts)
-            except HTTPException as e:
-                logger.error(f"HTTPException in chat build: {e.detail}")
-                await ws.send_json({"error": True, "status": e.status_code, "detail": e.detail})
-                continue
             except Exception as e:
-                logger.exception("Error building chat request")
-                await ws.send_json({"error": True, "status": 400, "detail": f"bad request: {e!s}"})
+                logger.exception("Chat build failed", exc_info=e)
+                await ws.send_json({"reply": ""})
                 continue
 
+            reply = ""
             try:
                 reply = await call_qwen(req_obj)
-                reply = reply or "（空回复）"
-            except HTTPException as e:
-                logger.error(f"LLM call failed: {e.detail}")
-                await ws.send_json({"error": True, "status": e.status_code, "detail": e.detail})
-                continue
+                if reply is None:
+                    reply = ""
             except Exception as e:
-                logger.exception("Agent error during LLM call")
-                await ws.send_json({"error": True, "status": 500, "detail": f"agent error: {e!s}"})
-                continue
+                logger.exception("LLM call failed", exc_info=e)
+                reply = ""
 
             await ws.send_json({"reply": reply})
     except WebSocketDisconnect:
